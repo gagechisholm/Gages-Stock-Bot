@@ -30,7 +30,7 @@ def initialize_db():
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
         
-        # Create tables
+        # Create table if it doesn't exist
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS stocks (
                 guild_id INTEGER,
@@ -39,6 +39,14 @@ def initialize_db():
                 PRIMARY KEY (guild_id, symbol)
             )
         """)
+
+        # Ensure `guild_id` column exists
+        cursor.execute("PRAGMA table_info(stocks)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'guild_id' not in columns:
+            cursor.execute("ALTER TABLE stocks ADD COLUMN guild_id INTEGER")
+        
+        # Create API usage table if it doesn't exist
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS api_usage (
                 request_count INTEGER,
@@ -52,6 +60,7 @@ def initialize_db():
         if cursor.fetchone()[0] == 0:
             cursor.execute("INSERT INTO api_usage (request_count, reset_date) VALUES (?, ?)", (0, next_reset_date()))
             conn.commit()
+
 
 def next_reset_date():
     """Calculate the next reset date for API requests (1st of next month at midnight)."""
