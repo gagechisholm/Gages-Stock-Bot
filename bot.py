@@ -9,8 +9,16 @@ from datetime import datetime
 import logging
 import sys
 
-# Configure logging
-logging.basicConfig(filename="app.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler("app.log", mode='a'),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+
+logging.info("Bot has started.")
 
 # Discord client setup
 intents = discord.Intents.default()
@@ -30,12 +38,6 @@ MONTHLY_LIMIT = 30000
 
 # Thresholds for stock change alerts (default to 5% per guild)
 alert_thresholds = {}
-
-logging.basicConfig(
-    level=logging.INFO,  # Log everything of level INFO and above
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    stream=sys.stdout  # Send log output to standard output
-)
 
 # Initialize the database
 def initialize_db():
@@ -137,7 +139,6 @@ def remove_stock(guild_id, symbol):
 @client.event
 async def on_ready():
     logging.info(f"We have logged in as {client.user}")
-    initialize_db()
     logging.info("Database initialized")
 
 @client.event
@@ -434,10 +435,13 @@ async def monitor_stock_changes():
                 tracked_stocks = cursor.fetchall()
 
                 for symbol, last_price in tracked_stocks:
-                    current_price = await fetch_stock_price(symbol)
-                    if current_price is None:
-                        continue  # Skip if the stock price couldn't be fetched
-
+                    try:
+                        current_price = await fetch_stock_price(symbol)
+                        if current_price is None:
+                            continue
+                        # Calculate and log percentage change...
+                    except Exception as e:
+                        logging.exception(f"Error processing stock {symbol}: {e}")
                     # Calculate percentage change
                     if last_price:
                         percent_change = ((current_price - last_price) / last_price) * 100
@@ -462,8 +466,12 @@ async def monitor_stock_changes():
             conn.commit()
         await asyncio.sleep(1800)  # Wait for 30 minutes
 
-
+# Main Script
 token = os.getenv('TOKEN')
-client.run(token)
-# Start the background task
+if not token:
+    logging.error("TOKEN environment variable not found. Bot cannot start.")
+    sys.exit(1)
+
+initialize_db()
 client.loop.create_task(monitor_stock_changes())
+client.run(token)
