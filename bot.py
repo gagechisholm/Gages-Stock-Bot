@@ -6,6 +6,8 @@ import requests
 import logging
 import sqlite3
 from datetime import datetime
+import logging
+import sys
 
 # Configure logging
 logging.basicConfig(filename="app.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -28,6 +30,12 @@ MONTHLY_LIMIT = 30000
 
 # Thresholds for stock change alerts (default to 5% per guild)
 alert_thresholds = {}
+
+logging.basicConfig(
+    level=logging.INFO,  # Log everything of level INFO and above
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    stream=sys.stdout  # Send log output to standard output
+)
 
 # Initialize the database
 def initialize_db():
