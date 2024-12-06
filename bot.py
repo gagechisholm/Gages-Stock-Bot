@@ -148,15 +148,45 @@ async def on_message(message):
             "2. **!removestock SYMBOL** - Removes a stock from the tracking list for this server (e.g., `!removestock TSLA`).\n"
             "3. **!watchlist** - Displays the current stock watchlist for this server.\n"
             "4. **!requests** - Shows how many API requests have been used out of the monthly limit.\n"
-            "5. **!price SYMBOL** - Shows the current price of requested stock\n"
-            "6. **!setthreshold PERCENTAGE** - Set the percentage threshold for stock change alerts (e.g., !setthreshold 10)\n"
-            "7. **!69** - Gives you a nice compliment\n"
-            "8. **!help** - Displays this help message.\n\n"
+            "5. **!price SYMBOL** - Shows the current price of requested stock.\n"
+            "6. **!setthreshold PERCENTAGE** - Set the percentage threshold for stock change alerts (e.g., `!setthreshold 10`).\n"
+            "7. **!forcecheck** - Force check stock prices in stocklist and notify of changes.\n"
+            "8. **!69** - Gives you a nice compliment.\n"
+            "9. **!help** - Displays this help message.\n\n"
             "Once a stock is added, the bot will monitor its price and notify if significant changes occur."
         )
         await message.channel.send(help_message)
         return
-    
+
+    if message.content.startswith("!forcecheck"):
+        tracked_stocks = load_stocks(guild_id)
+        if not tracked_stocks:
+            await message.channel.send("The stock watchlist for this server is empty.")
+            return
+
+        results = []
+        for symbol, last_price in tracked_stocks.items():
+            current_price = await fetch_stock_price(symbol)
+            if current_price is None:
+                results.append(f"{symbol}: Unable to fetch current price.")
+                continue
+
+            if last_price:
+                price_change = current_price - last_price
+                percent_change = (price_change / last_price) * 100
+                direction = "up" if price_change > 0 else "down"
+                results.append(
+                    f"{symbol}: {direction} {abs(percent_change):.2f}% - ${abs(price_change):.2f}"
+                )
+            else:
+                results.append(f"{symbol}: No previous price to compare.")
+
+        if results:
+            await message.channel.send("**Force Check Results:**\n" + "\n".join(results))
+        else:
+            await message.channel.send("No stocks found to check.")
+        return
+
     if message.content.startswith("!setthreshold"):
         parts = message.content.split()
         if len(parts) < 2 or not parts[1].isdigit():
