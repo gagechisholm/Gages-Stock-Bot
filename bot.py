@@ -394,15 +394,21 @@ async def fetch_stock_price(symbol):
         response = requests.get(STOCK_API_URL.format(symbol=symbol, apikey=FINNHUB_API_KEY))
         response.raise_for_status()
         data = response.json()
+        
+        # Log the full API response for debugging
         logging.info(f"API response for {symbol}: {data}")
-
-        if "c" in data:  # 'c' is the current price in Finnhub response
+        
+        # Check if the "c" field exists and is a valid price
+        if "c" in data and isinstance(data["c"], (int, float)):
             return data["c"]
         else:
-            logging.error(f"Invalid response for {symbol}: {data}")
+            logging.error(f"Invalid response format or missing 'c' field for {symbol}: {data}")
             return None
+    except requests.exceptions.RequestException as e:
+        logging.exception(f"Request error fetching price for {symbol}")
+        return None
     except Exception as e:
-        logging.exception(f"Error fetching price for {symbol}")
+        logging.exception(f"Unexpected error fetching price for {symbol}")
         return None
     
 async def monitor_stock_changes():
