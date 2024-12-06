@@ -26,6 +26,9 @@ DB_FILE = "stocks.db"
 request_count = 0
 MONTHLY_LIMIT = 30000
 
+# Thresholds for stock change alerts (default to 5% per guild)
+alert_thresholds = {}
+
 # Initialize the database
 def initialize_db():
     with sqlite3.connect(DB_FILE) as conn:
@@ -146,12 +149,43 @@ async def on_message(message):
             "3. **!watchlist** - Displays the current stock watchlist for this server.\n"
             "4. **!requests** - Shows how many API requests have been used out of the monthly limit.\n"
             "5. **!price SYMBOL** - Shows the current price of requested stock\n"
-            "6. **!69** - Gives you a nice compliment\n"
-            "7. **!help** - Displays this help message.\n\n"
+            "6. **!setthreshold PERCENTAGE** - Set the percentage threshold for stock change alerts (e.g., !setthreshold 10)\n"
+            "7. **!69** - Gives you a nice compliment\n"
+            "8. **!help** - Displays this help message.\n\n"
             "Once a stock is added, the bot will monitor its price and notify if significant changes occur."
         )
         await message.channel.send(help_message)
         return
+    
+    if message.content.startswith("!setthreshold"):
+        parts = message.content.split()
+        if len(parts) < 2 or not parts[1].isdigit():
+            await message.channel.send("Usage: !setthreshold PERCENTAGE (e.g., !setthreshold 10)")
+            return
+
+        threshold = int(parts[1])
+        alert_thresholds[guild_id] = threshold
+        await message.channel.send(f"Threshold for stock change alerts set to {threshold}% for this server.")
+
+    if message.content.startswith("!addstock"):
+        parts = message.content.split()
+        if len(parts) < 2:
+            await message.channel.send("Usage: !addstock SYMBOL")
+            return
+
+        stock_symbol = parts[1].upper()
+        current_price = await fetch_stock_price(stock_symbol)
+        if current_price is None:
+            await message.channel.send(f"Invalid stock symbol: {stock_symbol}. Please try again.")
+            return
+
+        tracked_stocks = load_stocks(guild_id)
+        if stock_symbol not in tracked_stocks:
+            save_stock(guild_id, stock_symbol, current_price)
+            await message.channel.send(f"Added {stock_symbol} to the tracking list for this server.")
+        else:
+            await message.channel.send(f"{stock_symbol} is already being tracked for this server.")
+
     
     if message.content.startswith("!price"):
         parts = message.content.split()
@@ -170,23 +204,8 @@ async def on_message(message):
             await message.channel.send(f"Unable to fetch the price for {stock_symbol}. Please check the symbol and try again.")
 
     if message.content.startswith("!69"):
-        message = get_random_compliment()
-        await message.channel.send(f"{message.author.mention} {message}")
-
-    if message.content.startswith("!addstock"):
-        parts = message.content.split()
-        if len(parts) < 2:
-            await message.channel.send("Usage: !addstock SYMBOL")
-            return
-
-        stock_symbol = parts[1].upper()
-        tracked_stocks = load_stocks(guild_id)
-
-        if stock_symbol not in tracked_stocks:
-            save_stock(guild_id, stock_symbol)
-            await message.channel.send(f"Added {stock_symbol} to the tracking list for this server.")
-        else:
-            await message.channel.send(f"{stock_symbol} is already being tracked for this server.")
+        compliment = await get_random_compliment()
+        await message.channel.send(f"{message.author.mention} {compliment}")
 
     if message.content.startswith("!removestock"):
         parts = message.content.split()
@@ -355,6 +374,52 @@ async def fetch_stock_price(symbol):
     except Exception as e:
         logging.exception(f"Error fetching price for {symbol}")
         return None
+    
+async def monitor_stock_changes():
+    """Monitor stock price changes every 30 minutes and notify users of significant changes."""
+    await client.wait_until_ready()  # Wait until the bot is ready
+    while not client.is_closed():
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT DISTINCT guild_id FROM stocks")
+            guild_ids = [row[0] for row in cursor.fetchall()]
+
+            for guild_id in guild_ids:
+                # Get the watchlist and current prices for the guild
+                cursor.execute("SELECT symbol, last_price FROM stocks WHERE guild_id = ?", (guild_id,))
+                tracked_stocks = cursor.fetchall()
+
+                for symbol, last_price in tracked_stocks:
+                    current_price = await fetch_stock_price(symbol)
+                    if current_price is None:
+                        continue  # Skip if the stock price couldn't be fetched
+
+                    # Calculate percentage change
+                    if last_price:
+                        percent_change = ((current_price - last_price) / last_price) * 100
+                        threshold = alert_thresholds.get(guild_id, 5)  # Default to 5% if no custom threshold
+                        if abs(percent_change) >= threshold:
+                            # Notify all users in the guild
+                            guild = discord.utils.get(client.guilds, id=guild_id)
+                            if guild:
+                                for channel in guild.text_channels:
+                                    if channel.permissions_for(guild.me).send_messages:
+                                        await channel.send(
+                                            f"⚠️ Stock Alert! {symbol} changed by {percent_change:.2f}% "
+                                            f"and is now ${current_price:.2f}."
+                                        )
+                                        break
+
+                    # Update the last price in the database
+                    cursor.execute(
+                        "UPDATE stocks SET last_price = ? WHERE guild_id = ? AND symbol = ?",
+                        (current_price, guild_id, symbol)
+                    )
+            conn.commit()
+        await asyncio.sleep(1800)  # Wait for 30 minutes
+
 
 token = os.getenv('TOKEN')
 client.run(token)
+# Start the background task
+client.loop.create_task(monitor_stock_changes())
