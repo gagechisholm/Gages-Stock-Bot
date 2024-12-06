@@ -1,5 +1,6 @@
 import discord
 import os
+import random
 import asyncio
 import requests
 import logging
@@ -144,11 +145,33 @@ async def on_message(message):
             "2. **!removestock SYMBOL** - Removes a stock from the tracking list for this server (e.g., `!removestock TSLA`).\n"
             "3. **!watchlist** - Displays the current stock watchlist for this server.\n"
             "4. **!requests** - Shows how many API requests have been used out of the monthly limit.\n"
-            "5. **!help** - Displays this help message.\n\n"
+            "5. **!price SYMBOL** - Shows the current price of requested stock\n"
+            "6. **!69** - Gives you a nice compliment\n"
+            "7. **!help** - Displays this help message.\n\n"
             "Once a stock is added, the bot will monitor its price and notify if significant changes occur."
         )
         await message.channel.send(help_message)
         return
+    
+    if message.content.startswith("!price"):
+        parts = message.content.split()
+        if len(parts) < 2:
+            await message.channel.send("Usage: !price SYMBOL")
+            return
+
+        stock_symbol = parts[1].upper()
+
+        # Fetch stock price
+        stock_price = await fetch_stock_price(stock_symbol)
+
+        if stock_price is not None:
+            await message.channel.send(f"The current price of {stock_symbol} is ${stock_price:.2f}.")
+        else:
+            await message.channel.send(f"Unable to fetch the price for {stock_symbol}. Please check the symbol and try again.")
+
+    if message.content.startswith("!69"):
+        message = get_random_compliment()
+        await message.channel.send(f"{message.author.mention} {message}")
 
     if message.content.startswith("!addstock"):
         parts = message.content.split()
@@ -192,6 +215,129 @@ async def on_message(message):
         current_count, reset_date = get_request_count()
         await message.channel.send(f"API requests used: {current_count}/{MONTHLY_LIMIT}\nResets on: {reset_date}")
 
+async def get_random_compliment():
+    compliments = [
+    "You make things better just by being here!",
+    "Your energy is infectious!",
+    "You always bring the best vibes.",
+    "You have an amazing perspective.",
+    "Your ideas are always so thoughtful.",
+    "You’re a true problem-solver!",
+    "You handle challenges with grace.",
+    "You make a difference every single day.",
+    "Your support means so much.",
+    "You’re an inspiration to everyone around you.",
+    "You’ve got a heart of gold.",
+    "You light up the room with your presence.",
+    "Your kindness is contagious.",
+    "You’re braver than you think.",
+    "You always know the right thing to say.",
+    "You’ve got an amazing sense of humor!",
+    "Your creativity knows no bounds.",
+    "You’re always so helpful.",
+    "You make people feel heard and valued.",
+    "Your positivity is magnetic.",
+    "You’re a fantastic listener.",
+    "You’ve got a brilliant mind.",
+    "Your passion is inspiring.",
+    "You bring out the best in others.",
+    "You’re so dependable and trustworthy.",
+    "You’re a joy to be around.",
+    "Your work ethic is unmatched.",
+    "You’re always learning and growing.",
+    "You’ve got a knack for solving tough problems.",
+    "You have a great eye for detail.",
+    "You’re a beacon of hope and positivity.",
+    "You inspire others to do better.",
+    "Your dedication is remarkable.",
+    "You have a contagious enthusiasm.",
+    "Your laughter is the best sound.",
+    "You’re great at making people feel special.",
+    "You’re always willing to lend a hand.",
+    "You’ve got a wonderful perspective on life.",
+    "Your courage is admirable.",
+    "You’re an excellent role model.",
+    "Your smile brightens the day.",
+    "You’re incredibly thoughtful.",
+    "You make hard things look easy.",
+    "Your honesty is refreshing.",
+    "You bring so much joy to this space.",
+    "You’re incredibly talented.",
+    "You’ve got a way of making things fun.",
+    "Your determination is inspiring.",
+    "You’re so easy to talk to.",
+    "You always make people feel welcome.",
+    "You’re genuinely one of a kind.",
+    "You’re great at turning ideas into reality.",
+    "Your insights are always so valuable.",
+    "You make complicated things seem simple.",
+    "You’re so open-minded and understanding.",
+    "Your presence makes a difference.",
+    "You’re an awesome team player.",
+    "You’ve got an incredible sense of humor.",
+    "Your hard work doesn’t go unnoticed.",
+    "You have a calming presence.",
+    "You’re amazing just as you are.",
+    "You’re so full of good ideas.",
+    "You have a way of seeing the best in people.",
+    "You’re someone people can always count on.",
+    "You’re a natural leader.",
+    "You make the world brighter.",
+    "You’re so quick-witted!",
+    "You’ve got the best attitude.",
+    "Your confidence is inspiring.",
+    "You’re a force of nature in the best way.",
+    "Your perspective is always appreciated.",
+    "You make people feel comfortable and safe.",
+    "You’re incredibly wise.",
+    "Your enthusiasm is energizing.",
+    "You’ve got a great sense of humor.",
+    "You’re amazing at finding solutions.",
+    "You’re a real go-getter.",
+    "You make this community better.",
+    "You’re so compassionate.",
+    "You’ve got a real gift for understanding people.",
+    "You always find the silver lining.",
+    "You’re one of the most genuine people around.",
+    "You have a fantastic work ethic.",
+    "You’re so patient and kind.",
+    "Your contributions are invaluable.",
+    "You’re great at making people laugh.",
+    "Your optimism is infectious.",
+    "You always find a way to make it work.",
+    "You bring out the best in those around you.",
+    "You’re a true original.",
+    "You’re so thoughtful and considerate.",
+    "You always show up when it matters.",
+    "You make people feel included.",
+    "You’ve got an incredible amount of talent.",
+    "You’re an amazing problem-solver.",
+    "You’re so supportive and uplifting.",
+    "Your encouragement means the world to others.",
+    "You make even tough days better.",
+    "You're doing amazing!",
+    "Your effort truly shows!",
+    "Keep up the great work!",
+    "You're a valuable member of this community.",
+    "Your positivity is inspiring!",
+    "You're making a difference.",
+    "You have a fantastic attitude!",
+    "You're stronger than you think.",
+    "Your creativity is awesome!",
+    "You're a great listener.",
+    "You brighten up this space!",
+    "Your hard work pays off.",
+    "You're appreciated more than you know.",
+    "Your kindness is contagious!",
+    "You're a joy to be around.",
+    "You have a wonderful sense of humor.",
+    "You're crushing it!",
+    "You’re capable of amazing things.",
+    "Your dedication is inspiring.",
+    "You're making progress every day."
+]
+    return random.choice(compliments)
+    
 async def fetch_stock_price(symbol):
     """Fetch the stock price from the Finnhub API."""
     try:
