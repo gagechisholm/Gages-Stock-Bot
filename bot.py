@@ -205,7 +205,7 @@ async def on_message(message):
 
         stock_symbol = parts[1].upper()
         current_price = await fetch_stock_price(stock_symbol)
-        if current_price is None:
+        if current_price is None or current_price == 0:
             await message.channel.send(f"Invalid stock symbol: {stock_symbol}. Please try again.")
             return
 
