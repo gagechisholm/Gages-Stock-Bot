@@ -128,6 +128,19 @@ async def on_message(message):
 
     guild_id = message.guild.id  # Unique ID for the server
 
+    if message.content.startswith("!help"):
+        help_message = (
+            "**Stock Bot Commands**:\n"
+            "1. **!addstock SYMBOL** - Adds a stock to the tracking list for this server (e.g., `!addstock AAPL`).\n"
+            "2. **!removestock SYMBOL** - Removes a stock from the tracking list for this server (e.g., `!removestock TSLA`).\n"
+            "3. **!watchlist** - Displays the current stock watchlist for this server.\n"
+            "4. **!requests** - Shows how many API requests have been used out of the monthly limit.\n"
+            "5. **!help** - Displays this help message.\n\n"
+            "Once a stock is added, the bot will monitor its price and notify if significant changes occur."
+        )
+        await message.channel.send(help_message)
+        return
+
     if message.content.startswith("!addstock"):
         parts = message.content.split()
         if len(parts) < 2:
