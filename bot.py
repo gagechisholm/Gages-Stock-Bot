@@ -139,7 +139,7 @@ def remove_stock(guild_id, symbol):
 @client.event
 async def on_ready():
     logging.info(f"We have logged in as {client.user}")
-    logging.info("Database initialized")
+    asyncio.create_task(monitor_stock_changes())
 
 @client.event
 async def on_message(message):
@@ -465,13 +465,17 @@ async def monitor_stock_changes():
                     )
             conn.commit()
         await asyncio.sleep(1800)  # Wait for 30 minutes
+        
+async def main(token):
+    async with client:
+        await client.start(token)
 
 # Main Script
 token = os.getenv('TOKEN')
 if not token:
     logging.error("TOKEN environment variable not found. Bot cannot start.")
-    sys.exit(1)
+    exit(1)
 
-initialize_db()
-client.loop.create_task(monitor_stock_changes())
-client.run(token)
+if __name__ == "__main__":
+    initialize_db()
+    asyncio.run(main(token))
