@@ -1,0 +1,14 @@
+2024-12-05 21:52:08,762 - WARNING - PyNaCl is not installed, voice will NOT be supported
+2024-12-05 21:52:08,762 - INFO - logging in using static token
+2024-12-05 21:54:03,838 - WARNING - PyNaCl is not installed, voice will NOT be supported
+2024-12-05 21:54:03,838 - INFO - logging in using static token
+2024-12-05 21:54:05,060 - INFO - Shard ID None has connected to Gateway (Session ID: 77f17221a03fe344240f4d83e142650d).
+2024-12-05 21:54:07,090 - INFO - We have logged in as Gage's Stock Bot#1397
+2024-12-05 21:54:07,116 - INFO - Loaded stocks from database: {}
+2024-12-05 21:55:34,220 - INFO - API response for AAPL: {'Global Quote': {'01. symbol': 'AAPL', '02. open': '243.9900', '03. high': '244.5400', '04. low': '242.1300', '05. price': '243.0400', '06. volume': '40033878', '07. latest trading day': '2024-12-05', '08. previous close': '243.0100', '09. change': '0.0300', '10. change percent': '0.0123%'}}
+2024-12-05 21:56:51,066 - WARNING - PyNaCl is not installed, voice will NOT be supported
+2024-12-05 21:56:51,066 - INFO - logging in using static token
+2024-12-05 21:56:52,075 - INFO - Shard ID None has connected to Gateway (Session ID: b0284798c18b20176d9bf2ea58494152).
+2024-12-05 21:56:54,078 - INFO - We have logged in as Gage's Stock Bot#1397
+2024-12-05 21:56:54,078 - INFO - Loaded stocks from database: {'AAPL': None}
+2024-12-05 21:56:54,315 - INFO - API response for AAPL: {'Global Quote': {'01. symbol': 'AAPL', '02. open': '243.9900', '03. high': '244.5400', '04. low': '242.1300', '05. price': '243.0400', '06. volume': '40033878', '07. latest trading day': '2024-12-05', '08. previous close': '243.0100', '09. change': '0.0300', '10. change percent': '0.0123%'}}
