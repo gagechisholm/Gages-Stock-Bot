@@ -65,7 +65,7 @@ TOKEN=your_discord_bot_token
 FINNHUB_API_KEY=your_finnhub_api_key
 
 
-###5️⃣ Run the Bot
+### 5️⃣ Run the Bot
 python bot.py
 
 
