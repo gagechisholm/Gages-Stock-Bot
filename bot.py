@@ -353,15 +353,18 @@ async def on_message(message):
         if not tracked_stocks:
             await message.channel.send("The stock watchlist for this server is empty.")
         else:
-            results = []
+            watchlist_lines = []
             for symbol, last_price in tracked_stocks.items():
                 current_price = await fetch_stock_price(symbol)
                 if current_price is not None:
-                    results.append(f"{symbol}: ${current_price:.2f}")
+                    watchlist_lines.append(f"{symbol}: ${current_price:.2f}")
                 else:
-                    results.append(f"{symbol}: Unable to fetch current price.")
-            await message.channel.send("**Current Stock Watchlist:**\n" + "\n".join(results))
+                    watchlist_lines.append(f"{symbol}: Unable to fetch current price.")
+            
+            watchlist = "\n".join(watchlist_lines)
+            await message.channel.send(f"Current stock watchlist for this server:\n```\n{watchlist}\n```")
         return
+
     
     if message.content.startswith("!requests"):
         current_count, reset_date = get_request_count()
