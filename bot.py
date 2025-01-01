@@ -232,7 +232,8 @@ async def on_message(message):
             "7. **!setthreshold PERCENTAGE** - Set the percentage threshold for stock change alerts (e.g., `!setthreshold 10`).\n"
             "8. **!setchannel** - Sets the current channel as the default for stock update notifications.\n"
             "9. **!69** - Gives you a nice compliment.\n"
-            "10. **!help** - Displays this help message.\n\n"
+            "10. **!imbored** - For when you're bored.\n"
+            "11. **!help** - Displays this help message.\n\n"
             "Once a stock is added, the bot will monitor its price and notify if significant changes occur in the designated channel."
         )
         await message.channel.send(help_message)
