@@ -12,6 +12,7 @@ import psycopg2
 from psycopg2.extras import DictCursor
 import signal
 import requests
+import aiohttp
 
 # Logging Configuration
 logging.basicConfig(
@@ -365,6 +366,15 @@ async def on_message(message):
             await message.channel.send(f"Current stock watchlist for this server:\n```\n{watchlist}\n```")
         return
 
+    if message.content.startswith("!imbored"):
+        async with aiohttp.ClientSession() as session:
+            async with session.get("https://uselessfacts.jsph.pl/random.json?language=en") as response:
+                if response.status == 200:
+                    data = await response.json()
+                    activity = data.get("text", "Couldn't fetch a fun fact.")
+                else:
+                    activity = "Too bad."
+        await message.channel.send(activity)
     
     if message.content.startswith("!requests"):
         current_count, reset_date = get_request_count()
