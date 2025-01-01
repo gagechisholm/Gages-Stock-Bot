@@ -1,4 +1,35 @@
-stocks.db
+# Logs
 app.log
+
+# Database
+stocks.db
+
+# VS Code settings
 .vscode/
+
+# Virtual environment
 .venv/
+
+# Byte-compiled Python files
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Test coverage
+.coverage
+*.cover
+*.py,cover
+coverage.xml
+*.cache
+
+# Packaging
+*.egg-info/
+dist/
+build/
+
+# Environment variables
+.env
+
+# Frontend build artifacts
+/frontend/dist/
