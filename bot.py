@@ -521,17 +521,15 @@ async def fetch_stock_price(symbol, retries=3, delay=2):
             response.raise_for_status()
             data = response.json()
 
-            # Check if the API response indicates an invalid stock symbol
-            if "c" in data and data["c"] == 0 and all(value in (0, None) for value in data.values()):
+            # Log the API response for debugging
+            logging.info(f"API response for {symbol}: {data}")
+
+            # Validate the response based on the API's behavior
+            if data.get("c", 0) > 0:  # "c" is the current price
+                return data["c"]
+            else:
                 logging.warning(f"Invalid stock symbol: {symbol}. API returned: {data}")
                 return None  # Invalid stock symbol
-
-            # Validate the 'c' field as a proper price
-            if "c" in data and isinstance(data["c"], (int, float)) and data["c"] > 0:
-                return data["c"]
-
-            logging.error(f"Unexpected response format for {symbol}: {data}")
-            return None  # Unexpected data format
         except requests.exceptions.RequestException as e:
             logging.warning(f"Request error for {symbol} (attempt {attempt + 1}/{retries}): {e}")
             if attempt < retries - 1:
@@ -540,6 +538,7 @@ async def fetch_stock_price(symbol, retries=3, delay=2):
             logging.exception(f"Unexpected error for {symbol}: {e}")
             return None
     return None
+
 
     
 # Monitor stock changes
