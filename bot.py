@@ -125,7 +125,9 @@ def update_request_count():
         cursor = conn.cursor()
         cursor.execute("SELECT request_count, reset_date FROM api_usage")
         current_count, reset_date = cursor.fetchone()
-        reset_date = datetime.strptime(reset_date, "%Y-%m-%d %H:%M:%S")
+        if isinstance(reset_date, str):
+            reset_date = datetime.strptime(reset_date, "%Y-%m-%d %H:%M:%S")
+
 
         if datetime.now() >= reset_date:
             current_count = 0
