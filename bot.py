@@ -137,7 +137,7 @@ def update_request_count():
                 (current_count, reset_date.strftime("%Y-%m-%d %H:%M:%S"))
             )
         current_count += 1
-        cursor.execute("UPDATE api_usage SET request_count = ?", (current_count,))
+        cursor.execute("UPDATE api_usage SET request_count = %s", (current_count,))
         conn.commit()
 
 def get_request_count():
@@ -196,7 +196,7 @@ def get_update_channel(guild_id):
 def shutdown_handler(signum, frame):
     logging.info("Shutting down gracefully...")
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(client.close())
+    asyncio.create_task(client.close())
     loop.stop()
     
 async def shutdown():
