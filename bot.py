@@ -267,7 +267,7 @@ async def on_message(message):
             stock_symbol = stock_symbol.upper()
             current_price = await fetch_stock_price(stock_symbol)
 
-            if current_price is None:
+            if current_price == 0:
                 invalid_stocks.append(stock_symbol)
             else:
                 save_stock(guild_id, stock_symbol, current_price)
@@ -292,7 +292,7 @@ async def on_message(message):
         results = []
         for symbol, last_price in tracked_stocks.items():
             current_price = await fetch_stock_price(symbol)
-            if current_price is None:
+            if current_price == 0:
                 results.append(f"{symbol}: Unable to fetch current price.")
                 continue
 
@@ -330,7 +330,7 @@ async def on_message(message):
 
         stock_symbol = parts[1].upper()
         current_price = await fetch_stock_price(stock_symbol)
-        if current_price is None or current_price == 0:
+        if current_price == 0:
             await message.channel.send(f"Hey retard,\n{stock_symbol} is not a valid stock:/\nPlease use your brain and try again.")
             return
 
