@@ -1,11 +1,25 @@
+# macOS system files
 .DS_Store
+
+# Node.js dependencies
 node_modules
-/dist
 
+# Build outputs
+# Uncomment if other builds are present
+# /build
 
-# local env files
+# Local environment files
+.env
 .env.local
 .env.*.local
+.venv/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# Heroku config
+.heroku/
 
 # Log files
 npm-debug.log*
