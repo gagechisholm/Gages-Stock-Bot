@@ -13,14 +13,16 @@ from psycopg2.extras import DictCursor
 import signal
 import requests
 import aiohttp
+from logging.handlers import RotatingFileHandler
 
 # Logging Configuration
+handler = RotatingFileHandler("app.log", maxBytes=10 * 1024 * 1024, backupCount=5)
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler("app.log", mode='a'),
-        logging.StreamHandler(sys.stdout)
+        handler,  # Rotating file handler
+        logging.StreamHandler(sys.stdout)  # Console output
     ]
 )
 
@@ -28,8 +30,12 @@ logging.info("Bot has started.")
 
 # Heroku API Key (For User Restarts)
 HEROKU_API_KEY = heroku_api_key = os.getenv("HEROKU_API_KEY")
-HEROKU_APP_NAME = heroku_app_name = os.getenv("HEROKU_APP_NAME")
+if not HEROKU_API_KEY:
+    logging.warning("HEROKU_API_KEY is not set. Stock price fetches may fail.")
 
+HEROKU_APP_NAME = heroku_app_name = os.getenv("HEROKU_APP_NAME")
+if not HEROKU_APP_NAME:
+    logging.warning("HEROKU_APP_NAME is not set. Stock price fetches may fail.")
 
 # Discord client setup
 intents = discord.Intents.default()
@@ -38,6 +44,9 @@ client = discord.Client(intents=intents)
 
 # Finnhub API Key
 FINNHUB_API_KEY = os.getenv('FINNHUB_API_KEY')
+if not FINNHUB_API_KEY:
+    logging.warning("FINNHUB_API_KEY is not set. Stock price fetches may fail.")
+
 STOCK_API_URL = "https://finnhub.io/api/v1/quote?symbol={symbol}&token={apikey}"
 
 # SQLite database file
@@ -52,6 +61,8 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     logging.error("DATABASE_URL environment variable not found. Cannot connect to PostgreSQL.")
     exit(1)
+else:
+    logging.info("Successfully Connected to PostgreSQL.")
 
 # Thresholds for stock change alerts (default to 5% per guild)
 alert_thresholds = {}
@@ -72,42 +83,47 @@ def get_db_connection(retries=3, delay=2):
 
 # Initialize the database
 def initialize_db():
-    with get_db_connection() as conn:
-        with conn.cursor() as cursor:
-            # Create the stocks table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS stocks (
-                    guild_id BIGINT,
-                    symbol TEXT,
-                    last_price FLOAT,
-                    PRIMARY KEY (guild_id, symbol)
-                )
-            """)
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                # Create the stocks table
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS stocks (
+                        guild_id BIGINT,
+                        symbol TEXT,
+                        last_price FLOAT,
+                        PRIMARY KEY (guild_id, symbol)
+                    )
+                """)
+                logging.info("Stocks table checked/created.")
+                
+                # Create the API usage table
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS api_usage (
+                        request_count INTEGER,
+                        reset_date TIMESTAMP
+                    )
+                """)
+                logging.info("API usage table checked/created.")
+                
+                # Create the settings table
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS settings (
+                        guild_id BIGINT PRIMARY KEY,
+                        update_channel_id BIGINT
+                    )
+                """)
 
-            # Create the API usage table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS api_usage (
-                    request_count INTEGER,
-                    reset_date TIMESTAMP
-                )
-            """)
-
-            # Create the settings table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS settings (
-                    guild_id BIGINT PRIMARY KEY,
-                    update_channel_id BIGINT
-                )
-            """)
-
-            # Initialize API usage if missing
-            cursor.execute("SELECT COUNT(*) FROM api_usage")
-            if cursor.fetchone()[0] == 0:
-                cursor.execute(
-                    "INSERT INTO api_usage (request_count, reset_date) VALUES (%s, %s)",
-                    (0, next_reset_date())
-                )
-            conn.commit()
+                # Initialize API usage if missing
+                cursor.execute("SELECT COUNT(*) FROM api_usage")
+                if cursor.fetchone()[0] == 0:
+                    cursor.execute(
+                        "INSERT INTO api_usage (request_count, reset_date) VALUES (%s, %s)",
+                        (0, next_reset_date())
+                    )
+                conn.commit()
+    except Exception as e:
+        logging.exception("Database initialization failed.")
 
 
 
@@ -195,7 +211,7 @@ def get_update_channel(guild_id):
         return row["update_channel_id"] if row else None
     
 def shutdown_handler(signum, frame):
-    logging.info("Shutting down gracefully...")
+    logging.info(f"Received signal {signum}. Initiating shutdown...")
     loop = asyncio.get_event_loop()
     asyncio.create_task(client.close())
     loop.stop()
@@ -237,11 +253,13 @@ async def on_message(message):
             "Once a stock is added, the bot will monitor its price and notify if significant changes occur in the designated channel."
         )
         await message.channel.send(help_message)
+        logging.info(f"HELP command received from {message.author}: {message.content}")
         return
     
     if message.content.startswith("!restart"):
         logging.info(f"Restart command received from {message.author}")
         if not HEROKU_API_KEY or not HEROKU_APP_NAME:
+            logging.info(f"Heroku API key or app name not configured - {message.author}: {message.content}")
             await message.channel.send("Heroku API key or app name not configured.")
             return
 
@@ -253,11 +271,14 @@ async def on_message(message):
 
         response = requests.delete(url, headers=headers)
         if response.status_code == 202:
+            logging.info(f"Bot Restart command successful from {message.author}: {message.content}")
             await message.channel.send("Bot is restarting...")
         else:
+            logging.info(f"Bot Restart command FAILED from {message.author}: {message.content}")
             await message.channel.send(f"Failed to restart: {response.status_code} - {response.text}")
 
     if message.content.startswith("!addstocks"):
+        logging.info(f"Command received from {message.author}: {message.content}")
         parts = message.content.split()[1:]
         if not parts:
             await message.channel.send("Usage: !addstocks SYMBOL1 SYMBOL2 ...")
@@ -277,47 +298,60 @@ async def on_message(message):
                 added_stocks.append(stock_symbol)
 
         if added_stocks:
+            logging.info(f"{message.author} added to watchlist {', '.join(added_stocks)}")
             await message.channel.send(f"Added to watchlist: {', '.join(added_stocks)}")
         if invalid_stocks:
+            logging.info(f"{message.author} FAILED to add INVALID stocks to watchlist: {', '.join(invalid_stocks)}")
             await message.channel.send(f"Invalid symbols: {', '.join(invalid_stocks)}")
 
     if message.content.startswith("!setchannel"):
+        logging.info(f"Command received from {message.author}: {message.content}")
         set_update_channel(guild_id, message.channel.id)
+        logging.info(f"{message.author} set active bot channel to {guild_id, message.channel.id}")
         await message.channel.send(f"Updates will be sent to this channel: {message.channel.mention}")
 
     if message.content.startswith("!setthreshold"):
+        logging.info(f"Command received from {message.author}: {message.content}")
         parts = message.content.split()
         if len(parts) < 2 or not parts[1].isdigit():
+            logging.info(f"{message.author} FAILED to set threshold: {message.content}")
             await message.channel.send("Usage: !setthreshold PERCENTAGE (e.g., !setthreshold 10)")
             return
 
         threshold = int(parts[1])
         alert_thresholds[guild_id] = threshold
+        logging.info(f"{message.author} set threshold percentage to {threshold}%")
         await message.channel.send(f"Threshold for stock change alerts set to {threshold}% for this server.")
 
     if message.content.startswith("!addstock"):
+        logging.info(f"Command received from {message.author}: {message.content}")
         parts = message.content.split()
         if len(parts) < 2:
+            logging.info(f"{message.author} FAILED to use addstock: {message.content}")
             await message.channel.send("Usage: !addstock SYMBOL")
             return
 
         stock_symbol = parts[1].upper()
         current_price = await fetch_stock_price(stock_symbol)
         if current_price is None or current_price == 0:
+            logging.info(f"{message.author} tried to add an INVALID stock to watchlist: {message.content}")
             await message.channel.send(f"Hey retard,\n{stock_symbol} is not a valid stock:/\nPlease use your brain and try again.")
             return
 
         tracked_stocks = load_stocks(guild_id)
         if stock_symbol not in tracked_stocks:
             save_stock(guild_id, stock_symbol, current_price)
+            logging.info(f"{message.author} successfully added {stock_symbol} to watchlist")
             await message.channel.send(f"Added {stock_symbol} to the tracking list for this server.")
         else:
             await message.channel.send(f"{stock_symbol} is already being tracked for this server.")
 
     
     if message.content.startswith("!price"):
+        logging.info(f"Command received from {message.author}: {message.content}")
         parts = message.content.split()
         if len(parts) < 2:
+            logging.info(f"{message.author} FAILED to use price check: {message.content}")
             await message.channel.send("Usage: !price SYMBOL")
             return
 
@@ -327,17 +361,22 @@ async def on_message(message):
         stock_price = await fetch_stock_price(stock_symbol)
 
         if stock_price is not None:
+            logging.info(f"{message.author} successfully checked the price of {stock_symbol}")
             await message.channel.send(f"The current price of {stock_symbol} is ${stock_price:.2f}.")
         else:
+            logging.info(f"{message.author} tried to check the price of an INVALID stock: {stock_symbol}")
             await message.channel.send(f"Hey retard,\n{stock_symbol} is not a valid stock:/\nPlease use your brain and try again.")
 
     if message.content.startswith("!69"):
+        logging.info(f"{message.author} asked for a compliment")
         compliment = await get_random_compliment()
         await message.channel.send(f"{message.author.mention} {compliment}")
 
     if message.content.startswith("!removestock"):
+        logging.info(f"Command received from {message.author}: {message.content}")
         parts = message.content.split()
         if len(parts) < 2:
+            logging.info(f"{message.author} FAILED to use remove stock: {message.content}")
             await message.channel.send("Usage: !removestock SYMBOL")
             return
 
@@ -346,28 +385,36 @@ async def on_message(message):
 
         if stock_symbol in tracked_stocks:
             remove_stock(guild_id, stock_symbol)
+            logging.info(f"{message.author} successfully removed {stock_symbol} from watchlist")
             await message.channel.send(f"Removed {stock_symbol} from the tracking list for this server.")
         else:
+            logging.info(f"{message.author} tried to remove an INVALID stock: {message.content}")
             await message.channel.send(f"{stock_symbol} is not being tracked for this server.")
 
     if message.content.startswith("!watchlist"):
+        logging.info(f"Command received from {message.author}: {message.content}")
         tracked_stocks = load_stocks(guild_id)
         if not tracked_stocks:
+            logging.info(f"{message.author} tried to check an EMPTY watchlist")
             await message.channel.send("The stock watchlist for this server is empty.")
         else:
             watchlist_lines = []
             for symbol, last_price in tracked_stocks.items():
                 current_price = await fetch_stock_price(symbol)
                 if current_price is not None:
+                    logging.info(f"WATCHLIST REQUEST, bot checked price for {symbol}")
                     watchlist_lines.append(f"{symbol}: ${current_price:.2f}")
                 else:
+                    logging.info(f"WATCHLIST REQUEST, bot FAILED to check price for {symbol}")
                     watchlist_lines.append(f"{symbol}: Unable to fetch current price.")
             
             watchlist = "\n".join(watchlist_lines)
+            logging.info(f"{message.author} checked watchlist")
             await message.channel.send(f"Current stock watchlist for this server:\n```\n{watchlist}\n```")
         return
 
     if message.content.startswith("!imbored"):
+        logging.info(f"{message.author} is bored...")
         async with aiohttp.ClientSession() as session:
             async with session.get("https://uselessfacts.jsph.pl/random.json?language=en") as response:
                 if response.status == 200:
@@ -379,6 +426,7 @@ async def on_message(message):
     
     if message.content.startswith("!requests"):
         current_count, reset_date = get_request_count()
+        logging.info(f"{message.author} checked API request limit")
         await message.channel.send(f"API requests used: {current_count}/{MONTHLY_LIMIT}\nResets on: {reset_date}")
 
 async def get_random_compliment():
@@ -537,6 +585,7 @@ async def fetch_stock_price(symbol, retries=3, delay=2):
 async def monitor_stock_changes():
     await client.wait_until_ready()
     while not client.is_closed():
+        logging.debug("Starting stock monitoring iteration.")
         try:
             with get_db_connection() as conn:
                 cursor = conn.cursor()
@@ -546,6 +595,7 @@ async def monitor_stock_changes():
                 for guild_id in guild_ids:
                     channel_id = get_update_channel(guild_id)
                     if not channel_id:
+                        logging.debug(f"Skipping guild {guild_id}: No update channel set.")
                         continue
 
                     channel = client.get_channel(channel_id)
@@ -563,6 +613,7 @@ async def monitor_stock_changes():
                         if current_price and last_price:
                             percent_change = ((current_price - last_price) / last_price) * 100
                             if abs(percent_change) >= 5:
+                                logging.info(f"Stock alert triggered for {symbol}: {percent_change:.2f}% change.")
                                 await channel.send(
                                     f"⚠️ Stock Alert! {symbol} changed by {percent_change:.2f}% "
                                     f"and is now ${current_price:.2f}."
@@ -576,6 +627,7 @@ async def monitor_stock_changes():
         except Exception as e:
             logging.exception("Error in monitor_stock_changes loop")
         await asyncio.sleep(1800)
+        logging.debug("Sleeping for 1800 seconds before next iteration.")
         
 async def main(token):
     async with client:
