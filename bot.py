@@ -219,10 +219,13 @@ def save_stock(guild_id, user_id, symbol, last_price=None):
 
         
         
-def remove_stock(guild_id, symbol):
+def remove_stock(guild_id, user_id, symbol):
     with get_db_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute("DELETE FROM stocks WHERE guild_id = %s AND symbol = %s", (guild_id, symbol))
+            cursor.execute(
+                "DELETE FROM stocks WHERE guild_id = %s AND user_id = %s AND symbol = %s",
+                (guild_id, user_id, symbol)
+            )
             conn.commit()
 
         
@@ -333,6 +336,7 @@ async def on_message(message):
     if message.author == client.user:
         return
 
+    user_id = message.author.id # Unique ID for the user
     guild_id = message.guild.id  # Unique ID for the server
 
     if message.content.startswith("!help"):
@@ -394,7 +398,7 @@ async def on_message(message):
             if current_price is None:
                 invalid_stocks.append(stock_symbol)
             else:
-                save_stock(guild_id, stock_symbol, current_price)
+                save_stock(guild_id, user_id, stock_symbol, current_price)
                 added_stocks.append(stock_symbol)
 
         if added_stocks:
@@ -418,8 +422,6 @@ async def on_message(message):
             return
 
         threshold = float(parts[1])
-        user_id = message.author.id
-        guild_id = message.guild.id
 
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -449,7 +451,7 @@ async def on_message(message):
             await message.channel.send(f"Hey retard,\n{stock_symbol} is not a valid stock:/\nPlease use your brain and try again.")
             return
 
-        tracked_stocks = load_stocks(guild_id)
+        tracked_stocks = load_stocks(guild_id, user_id)
         if stock_symbol not in tracked_stocks:
             user_id = message.author.id
             save_stock(guild_id, user_id, stock_symbol, current_price)
@@ -492,10 +494,10 @@ async def on_message(message):
             return
 
         stock_symbol = parts[1].upper()
-        tracked_stocks = load_stocks(guild_id)
+        tracked_stocks = load_stocks(guild_id, user_id)
 
         if stock_symbol in tracked_stocks:
-            remove_stock(guild_id, stock_symbol)
+            remove_stock(guild_id, user_id, stock_symbol)
             logging.info(f"{message.author} successfully removed {stock_symbol} from watchlist")
             await message.channel.send(f"Removed {stock_symbol} from the tracking list for this server.")
         else:
@@ -504,25 +506,29 @@ async def on_message(message):
 
     if message.content.startswith("!watchlist"):
         logging.info(f"Command received from {message.author}: {message.content}")
-        tracked_stocks = load_stocks(guild_id)
-        if not tracked_stocks:
-            logging.info(f"{message.author} tried to check an EMPTY watchlist")
-            await message.channel.send(f"{message.author.mention}, please add stocks to your watchlist.")
-        else:
-            watchlist_lines = []
-            for symbol, last_price in tracked_stocks.items():
-                current_price = await fetch_stock_price(symbol)
-                if current_price is not None:
-                    logging.info(f"WATCHLIST REQUEST, bot checked price for {symbol}")
-                    watchlist_lines.append(f"{symbol}: ${current_price:.2f}")
-                else:
-                    logging.info(f"WATCHLIST REQUEST, bot FAILED to check price for {symbol}")
-                    watchlist_lines.append(f"{symbol}: Unable to fetch current price.")
-            
-            watchlist = "\n".join(watchlist_lines)
-            logging.info(f"{message.author} checked watchlist")
-            await message.channel.send(f"{message.author.mention}'s watchlist:\n```\n{watchlist}\n```")
-        return
+
+        try:
+            tracked_stocks = load_stocks(guild_id, user_id)  # Pass both guild_id and user_id
+            if not tracked_stocks:
+                logging.info(f"{message.author} tried to check an EMPTY watchlist")
+                await message.channel.send(f"{message.author.mention}, your watchlist is empty.")
+            else:
+                watchlist_lines = []
+                for symbol, last_price in tracked_stocks.items():
+                    current_price = await fetch_stock_price(symbol)
+                    if current_price is not None:
+                        logging.info(f"WATCHLIST REQUEST: Checked price for {symbol}")
+                        watchlist_lines.append(f"{symbol}: ${current_price:.2f}")
+                    else:
+                        logging.info(f"WATCHLIST REQUEST FAILED: Couldn't fetch price for {symbol}")
+                        watchlist_lines.append(f"{symbol}: Unable to fetch current price.")
+                
+                watchlist = "\n".join(watchlist_lines)
+                logging.info(f"{message.author} checked their watchlist")
+                await message.channel.send(f"{message.author.mention}, your watchlist:\n```\n{watchlist}\n```")
+        except Exception as e:
+            logging.exception("Error fetching watchlist")
+            await message.channel.send("An error occurred while fetching your watchlist. Please try again later.")
 
     if message.content.startswith("!imbored"):
         logging.info(f"{message.author} is bored...")
