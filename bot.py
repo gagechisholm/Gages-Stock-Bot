@@ -113,7 +113,27 @@ def initialize_db():
                         update_channel_id BIGINT
                     )
                 """)
-
+                logging.info("Settings table checked/created.")
+                
+                # Create leaderboard table
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS leaderboard (
+                        date DATE,
+                        user_id BIGINT,
+                        username TEXT,
+                        guild_id BIGINT,
+                        score FLOAT,
+                        PRIMARY KEY (date, user_id, guild_id)
+                    )
+                """)
+                logging.info("Leaderboard table checked/created.")
+                
+                # Create user_id table
+                cursor.execute("""
+                    ALTER TABLE stocks ADD COLUMN IF NOT EXISTS user_id BIGINT;
+                """)
+                logging.info("User ID table checked/created.")
+                
                 # Initialize API usage if missing
                 cursor.execute("SELECT COUNT(*) FROM api_usage")
                 if cursor.fetchone()[0] == 0:
@@ -121,7 +141,21 @@ def initialize_db():
                         "INSERT INTO api_usage (request_count, reset_date) VALUES (%s, %s)",
                         (0, next_reset_date())
                     )
+                logging.info("API usage initialized.")
+                    
+                # Create thresholds table
+                cursor.execute("""
+                CREATE TABLE IF NOT EXISTS thresholds (
+                    user_id BIGINT,
+                    guild_id BIGINT,
+                    threshold FLOAT,
+                    PRIMARY KEY (user_id, guild_id)
+                )
+            """)
+                logging.info("Thresholds table checked/created.")
+                
                 conn.commit()
+                
     except Exception as e:
         logging.exception("Database initialization failed.")
 
@@ -164,22 +198,22 @@ def get_request_count():
         return cursor.fetchone()
 
 
-def load_stocks(guild_id):
+def load_stocks(guild_id, user_id):
     with get_db_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT symbol, last_price FROM stocks WHERE guild_id = %s", (guild_id,))
+            cursor.execute("SELECT symbol, last_price FROM stocks WHERE guild_id = %s AND user_id = %s", (guild_id, user_id))
             return {row["symbol"]: row["last_price"] for row in cursor.fetchall()}
 
 
 
 
-def save_stock(guild_id, symbol, last_price=None):
+def save_stock(guild_id, user_id, symbol, last_price=None):
     with get_db_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
-                "INSERT INTO stocks (guild_id, symbol, last_price) VALUES (%s, %s, %s) "
-                "ON CONFLICT (guild_id, symbol) DO UPDATE SET last_price = EXCLUDED.last_price",
-                (guild_id, symbol, last_price)
+                "INSERT INTO stocks (guild_id, user_id, symbol, last_price) VALUES (%s, %s, %s, %s) "
+                "ON CONFLICT (guild_id, user_id, symbol) DO UPDATE SET last_price = EXCLUDED.last_price",
+                (guild_id, user_id, symbol, last_price)
             )
             conn.commit()
 
@@ -216,6 +250,70 @@ def shutdown_handler(signum, frame):
     asyncio.create_task(client.close())
     loop.stop()
     
+def calculate_daily_performance():
+    logging.info(f"Calculating daily performance for leaderboard.")
+    today = datetime.now().date()
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        # Fetch distinct users and their stocks
+        cursor.execute("SELECT DISTINCT user_id, guild_id FROM stocks")
+        users = cursor.fetchall()
+
+        leaderboard_updates = []
+
+        for user in users:
+            logging.info(f"Fetching {user}")
+            user_id, guild_id = user
+            cursor.execute("""
+                SELECT symbol, last_price FROM stocks 
+                WHERE user_id = %s AND guild_id = %s
+            """, (user_id, guild_id))
+
+            stocks = cursor.fetchall()
+            total_percent_change = 0
+            count = 0
+
+            for stock in stocks:
+                logging.info(f"Parsing {user}'s Watchlist")
+                symbol, last_price = stock
+                current_price = asyncio.run(fetch_stock_price(symbol))
+
+                if current_price and last_price:
+                    percent_change = ((current_price - last_price) / last_price) * 100
+                    total_percent_change += percent_change
+                    count += 1
+
+            # Calculate average percentage change for the user
+            if count > 0:
+                avg_percent_change = total_percent_change / count
+                cursor.execute("SELECT username FROM users WHERE user_id = %s", (user_id,))
+                username = cursor.fetchone()
+                leaderboard_updates.append((today, user_id, username, guild_id, avg_percent_change))
+
+        # Insert updates into the leaderboard table
+        for update in leaderboard_updates:
+            cursor.execute("""
+                INSERT INTO leaderboard (date, user_id, username, guild_id, score)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (date, user_id, guild_id) DO UPDATE
+                SET score = EXCLUDED.score
+            """, update)
+
+        conn.commit()
+        logging.info(f"Calculation complete.")
+
+async def update_leaderboard():
+    await client.wait_until_ready()
+    while not client.is_closed():
+        now = datetime.now()
+        # Run at 4:00 PM daily (market close)
+        if now.hour == 16 and now.minute == 0:
+            logging.info("Updating leaderboard...")
+            calculate_daily_performance()
+            logging.info("Leaderboard updated.")
+        await asyncio.sleep(1800)  # Check every 30 minutes
+
 async def shutdown():
     await client.close()
     tasks = [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
@@ -226,6 +324,7 @@ async def shutdown():
 async def on_ready():
     logging.info(f"Logged in as {client.user}")
     asyncio.create_task(monitor_stock_changes())
+    asyncio.create_task(update_leaderboard())
 
 @client.event
 async def on_message(message):
@@ -239,18 +338,19 @@ async def on_message(message):
     if message.content.startswith("!help"):
         help_message = (
             "**Stock Bot Commands**:\n"
-            "1. **!addstock SYMBOL** - Adds a stock to the tracking list for this server (e.g., `!addstock AAPL`).\n"
-            "2. **!addstocks SYMBOL1 SYMBOL2 ...** - Adds multiple stocks to the tracking list at once (e.g., `!addstocks AAPL TSLA AMZN`).\n"
-            "3. **!removestock SYMBOL** - Removes a stock from the tracking list for this server (e.g., `!removestock TSLA`).\n"
-            "4. **!watchlist** - Displays the current stock watchlist for this server with current prices.\n"
+            "1. **!addstock SYMBOL** - Adds a stock to your personal tracking list (e.g., `!addstock AAPL`).\n"
+            "2. **!addstocks SYMBOL1 SYMBOL2 ...** - Adds multiple stocks to your personal tracking list at once (e.g., `!addstocks AAPL TSLA AMZN`).\n"
+            "3. **!removestock SYMBOL** - Removes a stock from your personal tracking list (e.g., `!removestock TSLA`).\n"
+            "4. **!watchlist** - Displays your current stock watchlist with the latest prices.\n"
             "5. **!requests** - Shows how many API requests have been used out of the monthly limit.\n"
-            "6. **!price SYMBOL** - Shows the current price of requested stock.\n"
-            "7. **!setthreshold PERCENTAGE** - Set the percentage threshold for stock change alerts (e.g., `!setthreshold 10`).\n"
+            "6. **!price SYMBOL** - Shows the current price of a specific stock (e.g., `!price TSLA`).\n"
+            "7. **!setthreshold PERCENTAGE** - Sets the percentage threshold for stock change alerts (e.g., `!setthreshold 10`).\n"
             "8. **!setchannel** - Sets the current channel as the default for stock update notifications.\n"
-            "9. **!69** - Gives you a nice compliment.\n"
-            "10. **!imbored** - For when you're bored.\n"
-            "11. **!help** - Displays this help message.\n\n"
-            "Once a stock is added, the bot will monitor its price and notify if significant changes occur in the designated channel."
+            "9. **!leaderboard** - Displays the leaderboard for today, showing users with the best-performing watchlists.\n"
+            "10. **!69** - Gives you a nice compliment.\n"
+            "11. **!imbored** - For when you're bored.\n"
+            "12. **!help** - Displays this help message.\n\n"
+            "Once a stock is added to your watchlist, the bot will monitor its price. Daily performance is tracked, and the leaderboard is updated at market close."
         )
         await message.channel.send(help_message)
         logging.info(f"HELP command received from {message.author}: {message.content}")
@@ -314,14 +414,25 @@ async def on_message(message):
         logging.info(f"Command received from {message.author}: {message.content}")
         parts = message.content.split()
         if len(parts) < 2 or not parts[1].isdigit():
-            logging.info(f"{message.author} FAILED to set threshold: {message.content}")
-            await message.channel.send("Usage: !setthreshold PERCENTAGE (e.g., !setthreshold 10)")
+            await message.channel.send("Usage: `!setthreshold PERCENTAGE` (e.g., `!setthreshold 10`).")
             return
 
-        threshold = int(parts[1])
-        alert_thresholds[guild_id] = threshold
-        logging.info(f"{message.author} set threshold percentage to {threshold}%")
-        await message.channel.send(f"Threshold for stock change alerts set to {threshold}% for this server.")
+        threshold = float(parts[1])
+        user_id = message.author.id
+        guild_id = message.guild.id
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO thresholds (user_id, guild_id, threshold)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (user_id, guild_id) DO UPDATE SET threshold = EXCLUDED.threshold
+            """, (user_id, guild_id, threshold))
+            conn.commit()
+
+        logging.info(f"Threshold set to {threshold}% for user {message.author} in guild {guild_id}.")
+        await message.channel.send(f"{message.author.mention}, your stock alert threshold has been set to {threshold}%.")
+
 
     if message.content.startswith("!addstock"):
         logging.info(f"Command received from {message.author}: {message.content}")
@@ -340,13 +451,13 @@ async def on_message(message):
 
         tracked_stocks = load_stocks(guild_id)
         if stock_symbol not in tracked_stocks:
-            save_stock(guild_id, stock_symbol, current_price)
+            user_id = message.author.id
+            save_stock(guild_id, user_id, stock_symbol, current_price)
             logging.info(f"{message.author} successfully added {stock_symbol} to watchlist")
             await message.channel.send(f"Added {stock_symbol} to the tracking list for this server.")
         else:
             await message.channel.send(f"{stock_symbol} is already being tracked for this server.")
 
-    
     if message.content.startswith("!price"):
         logging.info(f"Command received from {message.author}: {message.content}")
         parts = message.content.split()
@@ -396,7 +507,7 @@ async def on_message(message):
         tracked_stocks = load_stocks(guild_id)
         if not tracked_stocks:
             logging.info(f"{message.author} tried to check an EMPTY watchlist")
-            await message.channel.send("The stock watchlist for this server is empty.")
+            await message.channel.send(f"{message.author.mention}, please add stocks to your watchlist.")
         else:
             watchlist_lines = []
             for symbol, last_price in tracked_stocks.items():
@@ -410,7 +521,7 @@ async def on_message(message):
             
             watchlist = "\n".join(watchlist_lines)
             logging.info(f"{message.author} checked watchlist")
-            await message.channel.send(f"Current stock watchlist for this server:\n```\n{watchlist}\n```")
+            await message.channel.send(f"{message.author.mention}'s watchlist:\n```\n{watchlist}\n```")
         return
 
     if message.content.startswith("!imbored"):
@@ -428,6 +539,23 @@ async def on_message(message):
         current_count, reset_date = get_request_count()
         logging.info(f"{message.author} checked API request limit")
         await message.channel.send(f"API requests used: {current_count}/{MONTHLY_LIMIT}\nResets on: {reset_date}")
+
+    if message.content.startswith("!leaderboard"):
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT username, score FROM leaderboard
+                WHERE date = %s AND guild_id = %s
+                ORDER BY score DESC LIMIT 10
+            """, (datetime.now().date(), message.guild.id))
+
+            leaderboard = cursor.fetchall()
+            if leaderboard:
+                result = "\n".join([f"{i+1}. {row['username']}: {row['score']:.2f}%" for i, row in enumerate(leaderboard)])
+                await message.channel.send(f"**Today's Leaderboard:**\n{result}")
+            else:
+                await message.channel.send("No leaderboard data available for today. Please wait 24hrs for results.")
+
 
 async def get_random_compliment():
     compliments = [
@@ -602,27 +730,44 @@ async def monitor_stock_changes():
                     if not channel:
                         continue
 
-                    cursor.execute("SELECT symbol, last_price FROM stocks WHERE guild_id = %s", (guild_id,))
-                    stocks = cursor.fetchall()
+                    # Fetch distinct users for the guild
+                    cursor.execute("SELECT DISTINCT user_id FROM stocks WHERE guild_id = %s", (guild_id,))
+                    user_ids = [row["user_id"] for row in cursor.fetchall()]
 
-                    for row in stocks:
-                        symbol = row["symbol"]
-                        last_price = row["last_price"]
-                        current_price = await fetch_stock_price(symbol)
+                    for user_id in user_ids:
+                        # Fetch user's threshold
+                        cursor.execute("""
+                            SELECT threshold FROM thresholds 
+                            WHERE user_id = %s AND guild_id = %s
+                        """, (user_id, guild_id))
+                        threshold_row = cursor.fetchone()
+                        threshold = threshold_row["threshold"] if threshold_row else 5  # Default 5%
 
-                        if current_price and last_price:
-                            percent_change = ((current_price - last_price) / last_price) * 100
-                            if abs(percent_change) >= 5:
-                                logging.info(f"Stock alert triggered for {symbol}: {percent_change:.2f}% change.")
-                                await channel.send(
-                                    f"⚠️ Stock Alert! {symbol} changed by {percent_change:.2f}% "
-                                    f"and is now ${current_price:.2f}."
+                        cursor.execute("""
+                            SELECT symbol, last_price FROM stocks 
+                            WHERE guild_id = %s AND user_id = %s
+                        """, (guild_id, user_id))
+                        stocks = cursor.fetchall()
+
+                        for row in stocks:
+                            symbol = row["symbol"]
+                            last_price = row["last_price"]
+                            current_price = await fetch_stock_price(symbol)
+
+                            if current_price and last_price:
+                                percent_change = ((current_price - last_price) / last_price) * 100
+                                if abs(percent_change) >= threshold:
+                                    logging.info(f"Stock alert triggered for {symbol}: {percent_change:.2f}% change.")
+                                    await channel.send(
+                                        f"⚠️ Stock Alert for <@{user_id}>! {symbol} changed by {percent_change:.2f}% "
+                                        f"and is now ${current_price:.2f}."
+                                    )
+
+                                # Update the last known price in the database
+                                cursor.execute(
+                                    "UPDATE stocks SET last_price = %s WHERE guild_id = %s AND user_id = %s AND symbol = %s",
+                                    (current_price, guild_id, user_id, symbol)
                                 )
-
-                        cursor.execute(
-                        "UPDATE stocks SET last_price = %s WHERE guild_id = %s AND symbol = %s",
-                        (current_price, guild_id, symbol)
-                    )
                         conn.commit()
         except Exception as e:
             logging.exception("Error in monitor_stock_changes loop")
