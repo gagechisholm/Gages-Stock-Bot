@@ -90,9 +90,10 @@ def initialize_db():
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS stocks (
                         guild_id BIGINT,
+                        user_id BIGINT,
                         symbol TEXT,
                         last_price FLOAT,
-                        PRIMARY KEY (guild_id, symbol)
+                        PRIMARY KEY (guild_id, user_id, symbol)
                     )
                 """)
                 logging.info("Stocks table checked/created.")
