@@ -15,6 +15,25 @@ import requests
 import aiohttp
 from logging.handlers import RotatingFileHandler
 
+# UPDATE MESSAGE
+update_message = (
+    "**📢Update Notification📢**\n\n"
+    "🚀 **What's New in Gage's Stock Bot:**\n"
+    "1. **Individual Watchlists**: Track your own stocks separately from others in the server. "
+    "Your watchlist is private to you, and you can add or remove stocks as you like.\n"
+    "2. **Leaderboard**: Compete with other users! See the best-performing watchlists based on daily percentage changes. "
+    "The leaderboard updates every day after market close.\n"
+    "3. **Automatic Update Summaries**: Whenever the bot restarts, this message will notify you about recent updates and improvements.\n\n"
+    "**Commands Refresher**:\n"
+    "- Use `!addstock SYMBOL` to add a stock to your watchlist.\n"
+    "- Use `!watchlist` to view your tracked stocks.\n"
+    "- Set a channel for notifications with `!setchannel`.\n"
+    "- View the leaderboard with `!leaderboard`.\n"
+    "- Customize stock alert thresholds with `!setthreshold PERCENTAGE`.\n\n"
+    "For detailed help, type `!help`.\n\n"
+    "Thank you for using Gage's Stock Bot! 💼📈"
+)
+
 # Logging Configuration
 handler = RotatingFileHandler("app.log", maxBytes=10 * 1024 * 1024, backupCount=5)
 logging.basicConfig(
@@ -321,6 +340,30 @@ async def shutdown():
 @client.event
 async def on_ready():
     logging.info(f"Logged in as {client.user}")
+    
+        # Fetch all guilds where the bot is a member
+    guilds = client.guilds
+
+    for guild in guilds:
+        try:
+            # Fetch the update channel for this guild
+            update_channel_id = get_update_channel(guild.id)
+
+            if update_channel_id:
+                # Get the channel object
+                channel = client.get_channel(update_channel_id)
+
+                if channel:
+                    await channel.send(update_message)
+                    logging.info(f"Sent update summary to {guild.name} in channel {channel.name}")
+                else:
+                    logging.warning(f"Channel ID {update_channel_id} not found for guild {guild.name}")
+            else:
+                logging.info(f"No update channel set for guild {guild.name}")
+
+        except Exception as e:
+            logging.exception(f"Failed to send update message for guild {guild.name}: {e}")
+
     asyncio.create_task(monitor_stock_changes())
     asyncio.create_task(update_leaderboard())
 
