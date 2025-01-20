@@ -128,13 +128,7 @@ def initialize_db():
                     )
                 """)
                 logging.info("Leaderboard table checked/created.")
-                
-                # Create user_id table
-                cursor.execute("""
-                    ALTER TABLE stocks ADD COLUMN IF NOT EXISTS user_id BIGINT;
-                """)
-                logging.info("User ID table checked/created.")
-                
+
                 # Initialize API usage if missing
                 cursor.execute("SELECT COUNT(*) FROM api_usage")
                 if cursor.fetchone()[0] == 0:
