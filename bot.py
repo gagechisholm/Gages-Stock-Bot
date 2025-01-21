@@ -320,6 +320,21 @@ def calculate_daily_performance():
         conn.commit()
         logging.info(f"Calculation complete.")
 
+def check_rank(user_id, guild_id):
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT RANK() OVER (ORDER BY score DESC) AS rank
+                FROM leaderboard
+                WHERE date = %s AND guild_id = %s AND user_id = %s
+            """, (datetime.now().date(), guild_id, user_id))
+            result = cursor.fetchone()
+            return result["rank"] if result else None
+    except Exception as e:
+        logging.exception(f"Unable to fetch ranking for user {user_id} in guild {guild_id}.")
+        return None
+
 async def update_leaderboard():
     await client.wait_until_ready()
     while not client.is_closed():
@@ -379,20 +394,20 @@ async def on_message(message):
 
     if message.content.startswith("!help"):
         help_message = (
-            "**Stock Bot Commands**:\n"
-            "1. **!addstock SYMBOL** - Adds a stock to your personal tracking list (e.g., `!addstock AAPL`).\n"
-            "2. **!addstocks SYMBOL1 SYMBOL2 ...** - Adds multiple stocks to your personal tracking list at once (e.g., `!addstocks AAPL TSLA AMZN`).\n"
-            "3. **!removestock SYMBOL** - Removes a stock from your personal tracking list (e.g., `!removestock TSLA`).\n"
-            "4. **!watchlist** - Displays your current stock watchlist with the latest prices.\n"
-            "5. **!requests** - Shows how many API requests have been used out of the monthly limit.\n"
-            "6. **!price SYMBOL** - Shows the current price of a specific stock (e.g., `!price TSLA`).\n"
-            "7. **!setthreshold PERCENTAGE** - Sets the percentage threshold for stock change alerts (e.g., `!setthreshold 10`).\n"
-            "8. **!setchannel** - Sets the current channel as the default for stock update notifications.\n"
-            "9. **!leaderboard** - Displays the leaderboard for today, showing users with the best-performing watchlists.\n"
-            "10. **!69** - Gives you a nice compliment.\n"
-            "11. **!imbored** - For when you're bored.\n"
-            "12. **!help** - Displays this help message.\n\n"
-            "Once a stock is added to your watchlist, the bot will monitor its price. Daily performance is tracked, and the leaderboard is updated at market close."
+            "'''**Stock Bot Commands**:'''\n"
+            "'''1. **!addstock SYMBOL** - Adds a stock to your personal tracking list (e.g., `!addstock AAPL`).'''\n"
+            "'''2. **!addstocks SYMBOL1 SYMBOL2 ...** - Adds multiple stocks to your personal tracking list at once (e.g., `!addstocks AAPL TSLA AMZN`).'''\n"
+            "'''3. **!removestock SYMBOL** - Removes a stock from your personal tracking list (e.g., `!removestock TSLA`).'''\n"
+            "'''4. **!watchlist** - Displays your current stock watchlist with the latest prices.'''\n"
+            "'''5. **!requests** - Shows how many API requests have been used out of the monthly limit.'''\n"
+            "'''6. **!price SYMBOL** - Shows the current price of a specific stock (e.g., `!price TSLA`).'''\n"
+            "'''7. **!set PERCENTAGE** - Sets the percentage threshold for stock change alerts (e.g., `!setthreshold 10`).'''\n"
+            "'''8. **!setchannel** - Sets the current channel as the default for stock update notifications.'''\n"
+            "'''9. **!leaderboard** - Displays the leaderboard for today, showing users with the best-performing watchlists.'''\n"
+            "'''10. **!69** - Gives you a nice compliment.'''\n"
+            "'''11. **!imbored** - For when you're bored.'''\n"
+            "'''12. **!help** - Displays this help message.'''\n\n"
+            "'''Once a stock is added to your watchlist, the bot will monitor its price. Daily performance is tracked, and the leaderboard is updated at market close.'''"
         )
         await message.channel.send(help_message)
         logging.info(f"HELP command received from {message.author}: {message.content}")
@@ -441,7 +456,7 @@ async def on_message(message):
 
         if added_stocks:
             logging.info(f"{message.author} added to watchlist {', '.join(added_stocks)}")
-            await message.channel.send(f"Added to watchlist: {', '.join(added_stocks)}")
+            await message.channel.send(f"{message.author.mention} added '''{', '.join(added_stocks)}''' to thier watchlist.")
         if invalid_stocks:
             logging.info(f"{message.author} FAILED to add INVALID stocks to watchlist: {', '.join(invalid_stocks)}")
             await message.channel.send(f"Invalid symbols: {', '.join(invalid_stocks)}")
@@ -452,11 +467,11 @@ async def on_message(message):
         logging.info(f"{message.author} set active bot channel to {guild_id, message.channel.id}")
         await message.channel.send(f"Updates will be sent to this channel: {message.channel.mention}")
 
-    if message.content.startswith("!setthreshold"):
+    if message.content.startswith("!set"):
         logging.info(f"Command received from {message.author}: {message.content}")
         parts = message.content.split()
         if len(parts) < 2 or not parts[1].isdigit():
-            await message.channel.send("Usage: `!setthreshold PERCENTAGE` (e.g., `!setthreshold 10`).")
+            await message.channel.send("Usage: `!set PERCENTAGE` (e.g., `!set 10`).")
             return
 
         threshold = float(parts[1])
@@ -471,7 +486,7 @@ async def on_message(message):
             conn.commit()
 
         logging.info(f"Threshold set to {threshold}% for user {message.author} in guild {guild_id}.")
-        await message.channel.send(f"{message.author.mention}, your stock alert threshold has been set to {threshold}%.")
+        await message.channel.send(f"{message.author.mention} set his watchlist notification threshold to {threshold}%.")
 
 
     if message.content.startswith("!addstock"):
@@ -486,7 +501,7 @@ async def on_message(message):
         current_price = await fetch_stock_price(stock_symbol)
         if current_price is None or current_price == 0:
             logging.info(f"{message.author} tried to add an INVALID stock to watchlist: {message.content}")
-            await message.channel.send(f"Hey retard,\n{stock_symbol} is not a valid stock:/\nPlease use your brain and try again.")
+            await message.channel.send(f"Hey {message.author.mention}, womp womp:\n{stock_symbol} is not a valid stock:/\nPlease use your brain and try again.")
             return
 
         tracked_stocks = load_stocks(guild_id, user_id)
@@ -494,9 +509,9 @@ async def on_message(message):
             user_id = message.author.id
             save_stock(guild_id, user_id, stock_symbol, current_price)
             logging.info(f"{message.author} successfully added {stock_symbol} to watchlist")
-            await message.channel.send(f"Added {stock_symbol} to the tracking list for this server.")
+            await message.channel.send(f"{message.author.mention} added {stock_symbol} to their watchlist.")
         else:
-            await message.channel.send(f"{stock_symbol} is already being tracked for this server.")
+            await message.channel.send(f"Hey {message.author.mention}, {stock_symbol} is already being tracked on your watchlist.")
 
     if message.content.startswith("!price"):
         logging.info(f"Command received from {message.author}: {message.content}")
@@ -537,10 +552,10 @@ async def on_message(message):
         if stock_symbol in tracked_stocks:
             remove_stock(guild_id, user_id, stock_symbol)
             logging.info(f"{message.author} successfully removed {stock_symbol} from watchlist")
-            await message.channel.send(f"Removed {stock_symbol} from the tracking list for this server.")
+            await message.channel.send(f"{message.author.mention} removed {stock_symbol} from their watchlist.")
         else:
             logging.info(f"{message.author} tried to remove an INVALID stock: {message.content}")
-            await message.channel.send(f"{stock_symbol} is not being tracked for this server.")
+            await message.channel.send(f"{stock_symbol} is not on your watchlist.")
 
     if message.content.startswith("!watchlist"):
         logging.info(f"Command received from {message.author}: {message.content}")
@@ -549,7 +564,7 @@ async def on_message(message):
             tracked_stocks = load_stocks(guild_id, user_id)  # Pass both guild_id and user_id
             if not tracked_stocks:
                 logging.info(f"{message.author} tried to check an EMPTY watchlist")
-                await message.channel.send(f"{message.author.mention}, your watchlist is empty.")
+                await message.channel.send(f"Hey {message.author.mention}, your watchlist is empty.\nTry using '''!addstock SYMBOL''' or '''!addstocks SYMBOL SYMBOL ...'''")
             else:
                 watchlist_lines = []
                 for symbol, last_price in tracked_stocks.items():
@@ -561,9 +576,11 @@ async def on_message(message):
                         logging.info(f"WATCHLIST REQUEST FAILED: Couldn't fetch price for {symbol}")
                         watchlist_lines.append(f"{symbol}: Unable to fetch current price.")
                 
+                user_rank = check_rank(user_id, guild_id)
+                rank_message = f"{message.author}'s current leaderboard ranking: {user_rank}" if user_rank else "You are not currently ranked."
                 watchlist = "\n".join(watchlist_lines)
                 logging.info(f"{message.author} checked their watchlist")
-                await message.channel.send(f"{message.author.mention}, your watchlist:\n```\n{watchlist}\n```")
+                await message.channel.send(f"{message.author.mention}'s watchlist:\n```\n{watchlist}\n```\n{rank_message}")
         except Exception as e:
             logging.exception("Error fetching watchlist")
             await message.channel.send("An error occurred while fetching your watchlist. Please try again later.")
@@ -598,7 +615,7 @@ async def on_message(message):
                 result = "\n".join([f"{i+1}. {row['username']}: {row['score']:.2f}%" for i, row in enumerate(leaderboard)])
                 await message.channel.send(f"**Today's Leaderboard:**\n{result}")
             else:
-                await message.channel.send("No leaderboard data available for today. Please wait 24hrs for results.")
+                await message.channel.send("No leaderboard data available for today. Please wait 24hrs for results to populate.")
 
 
 async def get_random_compliment():
