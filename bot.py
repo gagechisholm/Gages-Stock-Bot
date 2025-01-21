@@ -17,21 +17,21 @@ from logging.handlers import RotatingFileHandler
 
 # UPDATE MESSAGE
 update_message = (
-    "**📢Update Notification📢**\n\n"
-    "🚀 **What's New in Gage's Stock Bot:**\n"
+    "**📢 Update Notification 📢**\n\n"
+    "🚀 **What's New in Gage's Stock Bot** 🚀\n\n"
     "1. **Individual Watchlists**: Track your own stocks separately from others in the server. "
-    "Your watchlist is private to you, and you can add or remove stocks as you like.\n"
+    "Your watchlist is private to you, and you can add or remove stocks as you like.\n\n"
     "2. **Leaderboard**: Compete with other users! See the best-performing watchlists based on daily percentage changes. "
-    "The leaderboard updates every day after market close.\n"
+    "The leaderboard updates every day after market close.\n\n"
     "3. **Automatic Update Summaries**: Whenever the bot restarts, this message will notify you about recent updates and improvements.\n\n"
-    "**Commands Refresher**:\n"
-    "- Use `!addstock SYMBOL` to add a stock to your watchlist.\n"
-    "- Use `!watchlist` to view your tracked stocks.\n"
-    "- Set a channel for notifications with `!setchannel`.\n"
-    "- View the leaderboard with `!leaderboard`.\n"
+    "**Commands Refresher**:\n\n"
+    "- Use `!addstock SYMBOL` to add a stock to your watchlist.\n\n"
+    "- Use `!watchlist` to view your tracked stocks.\n\n"
+    "- Set a channel for notifications with `!setchannel`.\n\n"
+    "- View the leaderboard with `!leaderboard`.\n\n"
     "- Customize stock alert thresholds with `!setthreshold PERCENTAGE`.\n\n"
-    "For detailed help, type `!help`.\n\n"
-    "Thank you for using Gage's Stock Bot! 💼📈"
+    "For detailed help, type `!help`.\n\n\n"
+    "Thank you for using Gage's Stock Bot 💼📈"
 )
 
 # Logging Configuration
