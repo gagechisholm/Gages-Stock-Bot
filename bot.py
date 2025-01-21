@@ -31,7 +31,7 @@ update_message = (
     "- View the leaderboard with `!leaderboard`.\n\n"
     "- Customize stock alert thresholds with `!set PERCENTAGE`.\n\n"
     "For detailed help, type `!help`.\n\n\n"
-    "Thank you for your continued dedication and support 💼📈"
+    "Thank you for your continued support 💼📈"
 )
 
 # Logging Configuration
@@ -456,7 +456,7 @@ async def on_message(message):
 
         if added_stocks:
             logging.info(f"{message.author} added to watchlist {', '.join(added_stocks)}")
-            await message.channel.send(f"{message.author.mention} added ```{', '.join(added_stocks)}``` to thier watchlist.")
+            await message.channel.send(f"{message.author.mention} added ```{', '.join(added_stocks)}``` to their watchlist.")
         if invalid_stocks:
             logging.info(f"{message.author} FAILED to add INVALID stocks to watchlist: {', '.join(invalid_stocks)}")
             await message.channel.send(f"Invalid symbols: {', '.join(invalid_stocks)}")
