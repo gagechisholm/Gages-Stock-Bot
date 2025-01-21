@@ -394,19 +394,19 @@ async def on_message(message):
 
     if message.content.startswith("!help"):
         help_message = (
-            "``` **Stock Bot Commands**:```\n"
-            "```1. **!addstock SYMBOL** - Adds a stock to your personal tracking list (e.g., `!addstock AAPL`).```\n\n"
-            "```2. **!addstocks SYMBOL1 SYMBOL2 ...** - Adds multiple stocks to your personal tracking list at once (e.g., `!addstocks AAPL TSLA AMZN`).```\n\n"
-            "```3. **!removestock SYMBOL** - Removes a stock from your personal tracking list (e.g., `!removestock TSLA`).```\n\n"
-            "```4. **!watchlist** - Displays your current stock watchlist with the latest prices.```\n\n"
-            "```5. **!requests** - Shows how many API requests have been used out of the monthly limit.```\n\n"
-            "```6. **!price SYMBOL** - Shows the current price of a specific stock (e.g., `!price TSLA`).```\n\n"
-            "```7. **!set PERCENTAGE** - Sets the percentage threshold for stock change alerts (e.g., `!setthreshold 10`).```\n\n"
-            "```8. **!setchannel** - Sets the current channel as the default for stock update notifications.```\n\n"
-            "```9. **!leaderboard** - Displays the leaderboard for today, showing users with the best-performing watchlists.```\n\n"
-            "```10. **!69** - Gives you a nice compliment.```\n\n"
-            "```11. **!imbored** - For when you're bored.```\n\n"
-            "```12. **!help** - Displays this help message.```\n\n"
+            "``` Stock Bot Commands ```\n"
+            "1. **!addstock SYMBOL** - Adds a stock to your personal tracking list (e.g., `!addstock AAPL`).\n\n"
+            "2. **!addstocks SYMBOL1 SYMBOL2 ...** - Adds multiple stocks to your personal tracking list at once (e.g., `!addstocks AAPL TSLA AMZN`).\n\n"
+            "3. **!removestock SYMBOL** - Removes a stock from your personal tracking list (e.g., `!removestock TSLA`).\n\n"
+            "4. **!watchlist** - Displays your current stock watchlist with the latest prices.\n\n"
+            "5. **!requests** - Shows how many API requests have been used out of the monthly limit.\n\n"
+            "6. **!price SYMBOL** - Shows the current price of a specific stock (e.g., `!price TSLA`).\n\n"
+            "7. **!set PERCENTAGE** - Sets the percentage threshold for stock change alerts (e.g., `!setthreshold 10`).\n\n"
+            "8. **!setchannel** - Sets the current channel as the default for stock update notifications.\n\n"
+            "9. **!leaderboard** - Displays the leaderboard for today, showing users with the best-performing watchlists.\n\n"
+            "10. **!69** - Gives you a nice compliment.\n\n"
+            "11. **!imbored** - For when you're bored.\n\n"
+            "12. **!help** - Displays this help message.\n\n"
             "```Once a stock is added to your watchlist, the bot will monitor its price. Daily performance is tracked, and the leaderboard is updated at market close.```"
         )
         await message.channel.send(help_message)
