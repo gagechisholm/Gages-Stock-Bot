@@ -29,9 +29,9 @@ update_message = (
     "- Use `!watchlist` to view your tracked stocks.\n\n"
     "- Set a channel for notifications with `!setchannel`.\n\n"
     "- View the leaderboard with `!leaderboard`.\n\n"
-    "- Customize stock alert thresholds with `!setthreshold PERCENTAGE`.\n\n"
+    "- Customize stock alert thresholds with `!set PERCENTAGE`.\n\n"
     "For detailed help, type `!help`.\n\n\n"
-    "Thank you for using Gage's Stock Bot 💼📈"
+    "Thank you for your continued dedication and support 💼📈"
 )
 
 # Logging Configuration
@@ -394,20 +394,20 @@ async def on_message(message):
 
     if message.content.startswith("!help"):
         help_message = (
-            "'''**Stock Bot Commands**:'''\n"
-            "'''1. **!addstock SYMBOL** - Adds a stock to your personal tracking list (e.g., `!addstock AAPL`).'''\n"
-            "'''2. **!addstocks SYMBOL1 SYMBOL2 ...** - Adds multiple stocks to your personal tracking list at once (e.g., `!addstocks AAPL TSLA AMZN`).'''\n"
-            "'''3. **!removestock SYMBOL** - Removes a stock from your personal tracking list (e.g., `!removestock TSLA`).'''\n"
-            "'''4. **!watchlist** - Displays your current stock watchlist with the latest prices.'''\n"
-            "'''5. **!requests** - Shows how many API requests have been used out of the monthly limit.'''\n"
-            "'''6. **!price SYMBOL** - Shows the current price of a specific stock (e.g., `!price TSLA`).'''\n"
-            "'''7. **!set PERCENTAGE** - Sets the percentage threshold for stock change alerts (e.g., `!setthreshold 10`).'''\n"
-            "'''8. **!setchannel** - Sets the current channel as the default for stock update notifications.'''\n"
-            "'''9. **!leaderboard** - Displays the leaderboard for today, showing users with the best-performing watchlists.'''\n"
-            "'''10. **!69** - Gives you a nice compliment.'''\n"
-            "'''11. **!imbored** - For when you're bored.'''\n"
-            "'''12. **!help** - Displays this help message.'''\n\n"
-            "'''Once a stock is added to your watchlist, the bot will monitor its price. Daily performance is tracked, and the leaderboard is updated at market close.'''"
+            "``` **Stock Bot Commands**:```\n"
+            "```1. **!addstock SYMBOL** - Adds a stock to your personal tracking list (e.g., `!addstock AAPL`).```\n\n"
+            "```2. **!addstocks SYMBOL1 SYMBOL2 ...** - Adds multiple stocks to your personal tracking list at once (e.g., `!addstocks AAPL TSLA AMZN`).```\n\n"
+            "```3. **!removestock SYMBOL** - Removes a stock from your personal tracking list (e.g., `!removestock TSLA`).```\n\n"
+            "```4. **!watchlist** - Displays your current stock watchlist with the latest prices.```\n\n"
+            "```5. **!requests** - Shows how many API requests have been used out of the monthly limit.```\n\n"
+            "```6. **!price SYMBOL** - Shows the current price of a specific stock (e.g., `!price TSLA`).```\n\n"
+            "```7. **!set PERCENTAGE** - Sets the percentage threshold for stock change alerts (e.g., `!setthreshold 10`).```\n\n"
+            "```8. **!setchannel** - Sets the current channel as the default for stock update notifications.```\n\n"
+            "```9. **!leaderboard** - Displays the leaderboard for today, showing users with the best-performing watchlists.```\n\n"
+            "```10. **!69** - Gives you a nice compliment.```\n\n"
+            "```11. **!imbored** - For when you're bored.```\n\n"
+            "```12. **!help** - Displays this help message.```\n\n"
+            "```Once a stock is added to your watchlist, the bot will monitor its price. Daily performance is tracked, and the leaderboard is updated at market close.```"
         )
         await message.channel.send(help_message)
         logging.info(f"HELP command received from {message.author}: {message.content}")
@@ -456,7 +456,7 @@ async def on_message(message):
 
         if added_stocks:
             logging.info(f"{message.author} added to watchlist {', '.join(added_stocks)}")
-            await message.channel.send(f"{message.author.mention} added '''{', '.join(added_stocks)}''' to thier watchlist.")
+            await message.channel.send(f"{message.author.mention} added ```{', '.join(added_stocks)}``` to thier watchlist.")
         if invalid_stocks:
             logging.info(f"{message.author} FAILED to add INVALID stocks to watchlist: {', '.join(invalid_stocks)}")
             await message.channel.send(f"Invalid symbols: {', '.join(invalid_stocks)}")
@@ -501,7 +501,7 @@ async def on_message(message):
         current_price = await fetch_stock_price(stock_symbol)
         if current_price is None or current_price == 0:
             logging.info(f"{message.author} tried to add an INVALID stock to watchlist: {message.content}")
-            await message.channel.send(f"Hey {message.author.mention}, womp womp:\n{stock_symbol} is not a valid stock:/\nPlease use your brain and try again.")
+            await message.channel.send(f"Hey {message.author.mention}, womp womp:\n{stock_symbol} is not a valid stock.\nMake sure the stock is available on NASDAQ\nIf you need additional support go here: https://www.dummies.com/category/books/reading-33710/")
             return
 
         tracked_stocks = load_stocks(guild_id, user_id)
@@ -531,7 +531,7 @@ async def on_message(message):
             await message.channel.send(f"The current price of {stock_symbol} is ${stock_price:.2f}.")
         else:
             logging.info(f"{message.author} tried to check the price of an INVALID stock: {stock_symbol}")
-            await message.channel.send(f"Hey retard,\n{stock_symbol} is not a valid stock:/\nPlease use your brain and try again.")
+            await message.channel.send(f"Hey {message.author.mention}, womp womp:\n{stock_symbol} is not a valid stock.\nMake sure the stock is available on NASDAQ\nIf you need additional support go here: https://www.dummies.com/category/books/reading-33710/")
 
     if message.content.startswith("!69"):
         logging.info(f"{message.author} asked for a compliment")
@@ -564,7 +564,7 @@ async def on_message(message):
             tracked_stocks = load_stocks(guild_id, user_id)  # Pass both guild_id and user_id
             if not tracked_stocks:
                 logging.info(f"{message.author} tried to check an EMPTY watchlist")
-                await message.channel.send(f"Hey {message.author.mention}, your watchlist is empty.\nTry using '''!addstock SYMBOL''' or '''!addstocks SYMBOL SYMBOL ...'''")
+                await message.channel.send(f"Hey {message.author.mention}, your watchlist is empty.\nTry using ```!addstock SYMBOL``` or ```!addstocks SYMBOL SYMBOL ...```")
             else:
                 watchlist_lines = []
                 for symbol, last_price in tracked_stocks.items():
