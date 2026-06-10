@@ -1,13 +1,16 @@
+import calendar
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
+from zoneinfo import ZoneInfo
 import asyncio
 import os
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from dotenv import load_dotenv
+from openai import AsyncOpenAI
 
 import market
 import db
@@ -32,12 +35,116 @@ logging.basicConfig(
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+ET = ZoneInfo("America/New_York")
 PREMIUM_PRO_SKU_ID = os.environ.get("PREMIUM_PRO_SKU_ID")
 PREMIUM_PLUS_SKU_ID = os.environ.get("PREMIUM_PLUS_SKU_ID")
+
+_openai_client: AsyncOpenAI | None = None
+_leaderboard_posted: set[str] = set()  # "guild_id:date" keys to prevent double-posting
+
+
+def get_openai() -> AsyncOpenAI:
+    global _openai_client
+    if _openai_client is None:
+        _openai_client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+    return _openai_client
 
 
 async def has_premium(guild_id: int) -> bool:
     return await db.is_premium(guild_id)
+
+
+# ---------------------------------------------------------------------------
+# Leaderboard helpers
+# ---------------------------------------------------------------------------
+
+async def compute_leaderboard(guild: discord.Guild) -> list[dict]:
+    """Ranks members by avg % gain across watchlist picks since they were added."""
+    entries = await db.get_all_guild_watchlists(guild.id)
+    if not entries:
+        return []
+
+    symbols = list({e["symbol"] for e in entries})
+    quotes = await market.get_quotes(symbols)
+
+    user_gains: dict[int, list[float]] = {}
+    for entry in entries:
+        uid = entry["user_id"]
+        sym = entry["symbol"]
+        added = entry.get("added_price")
+        q = quotes.get(sym)
+        if not q or not added or added <= 0:
+            continue
+        current = q.get("close") or 0
+        gain_pct = (current - added) / added * 100
+        user_gains.setdefault(uid, []).append(gain_pct)
+
+    ranked = []
+    for uid, gains in sorted(
+        user_gains.items(),
+        key=lambda x: sum(x[1]) / len(x[1]),
+        reverse=True,
+    ):
+        avg = sum(gains) / len(gains)
+        member = guild.get_member(uid)
+        name = member.display_name if member else f"User {uid}"
+        ranked.append({"user_id": uid, "name": name, "avg_gain": avg, "pick_count": len(gains)})
+
+    for i, row in enumerate(ranked):
+        row["rank"] = i + 1
+
+    return ranked
+
+
+def _get_leaderboard_period(now: datetime) -> str | None:
+    """Returns 'monthly', 'weekly', 'daily', or None for weekends."""
+    if now.weekday() > 4:
+        return None
+    if now.weekday() == 4:  # Friday
+        last_day = calendar.monthrange(now.year, now.month)[1]
+        last_date = now.replace(day=last_day)
+        days_back = (last_date.weekday() - 4) % 7
+        last_friday = last_date - timedelta(days=days_back)
+        if now.date() == last_friday.date():
+            return "monthly"
+        return "weekly"
+    return "daily"
+
+
+async def generate_brainrot_announcement(period: str, rankings: list[dict]) -> str:
+    stats = "\n".join(
+        f"{r['rank']}. {r['name']} {r['avg_gain']:+.2f}% ({r['pick_count']} picks)"
+        for r in rankings[:10]
+    )
+    prompt = (
+        f"Announce the leaderboard rankings for stock portfolios {period}, "
+        f"roast and praise them individually, line by line. Stats:\n{stats}"
+    )
+    try:
+        response = await get_openai().chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are BrainrotGPT, a chaotic, unhinged, Gen-Z stock market commentator. "
+                        "You roast losers and hype winners. Keep it short, punchy, and entertaining. "
+                        "Use internet slang, emojis, and financial memes. No asterisks for formatting."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=600,
+        )
+        return response.choices[0].message.content
+    except Exception:
+        logging.exception("OpenAI call failed, falling back to plain leaderboard")
+        medals = ["🥇", "🥈", "🥉"]
+        lines = [f"**{period.capitalize()} Leaderboard**"]
+        for r in rankings[:10]:
+            prefix = medals[r["rank"] - 1] if r["rank"] <= 3 else f"{r['rank']}."
+            lines.append(f"{prefix} **{r['name']}** {r['avg_gain']:+.2f}%")
+        return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -53,6 +160,7 @@ async def on_ready():
     except Exception:
         logging.exception("Failed to sync slash commands")
     monitor_alerts.start()
+    scheduled_leaderboard.start()
 
 
 @bot.event
@@ -70,31 +178,10 @@ async def on_guild_join(guild: discord.Guild):
         ),
         color=discord.Color.green(),
     )
-    embed.add_field(
-        name="/quote",
-        value="Get the current price of any stock",
-        inline=False,
-    )
-    embed.add_field(
-        name="/watchlist add/remove/view",
-        value="Track stocks on your personal watchlist",
-        inline=False,
-    )
-    embed.add_field(
-        name="/alert set/list/remove",
-        value="Get notified when a stock moves by a % you set",
-        inline=False,
-    )
-    embed.add_field(
-        name="/portfolio buy/sell/view",
-        value="Paper-trade and track a virtual portfolio",
-        inline=False,
-    )
-    embed.add_field(
-        name="/leaderboard",
-        value="See who's winning the paper-trading competition",
-        inline=False,
-    )
+    embed.add_field(name="/quote", value="Get the current price of any stock", inline=False)
+    embed.add_field(name="/watchlist add/remove/view", value="Track stocks on your personal watchlist and compete on the leaderboard", inline=False)
+    embed.add_field(name="/alert set/list/remove", value="Get notified when a stock moves by a % you set", inline=False)
+    embed.add_field(name="/leaderboard", value="See who has the best stock picks in the server", inline=False)
     embed.set_footer(text="Run /setup info at any time to check your configuration.")
 
     channel = guild.system_channel
@@ -118,8 +205,7 @@ async def quote(interaction: discord.Interaction, symbol: str):
     q = await market.get_quote(symbol)
     if not q:
         await interaction.followup.send(
-            f"Could not find a price for **{symbol.upper()}**. "
-            "Double-check the ticker symbol.",
+            f"Could not find a price for **{symbol.upper()}**. Double-check the ticker symbol.",
             ephemeral=True,
         )
         return
@@ -144,8 +230,7 @@ async def watchlist_add(interaction: discord.Interaction, symbol: str):
     current_list = await db.get_member_watchlist(interaction.guild_id, interaction.user.id)
     if len(current_list) >= 10 and not await has_premium(interaction.guild_id):
         await interaction.followup.send(
-            "Free watchlists are limited to 10 stocks. "
-            "Upgrade to Pro to add more.",
+            "Free watchlists are limited to 10 stocks. Upgrade to Pro to add more.",
             ephemeral=True,
         )
         return
@@ -153,21 +238,22 @@ async def watchlist_add(interaction: discord.Interaction, symbol: str):
     q = await market.get_quote(symbol)
     if not q:
         await interaction.followup.send(
-            f"**{symbol}** doesn't look like a valid ticker. "
-            "Check the symbol and try again.",
+            f"**{symbol}** doesn't look like a valid ticker. Check the symbol and try again.",
             ephemeral=True,
         )
         return
 
-    added = await db.add_to_member_watchlist(interaction.guild_id, interaction.user.id, symbol)
+    added_price = q.get("close") or None
+    added = await db.add_to_member_watchlist(
+        interaction.guild_id, interaction.user.id, symbol, added_price
+    )
     if not added:
-        await interaction.followup.send(
-            f"**{symbol}** is already in your watchlist.", ephemeral=True
-        )
+        await interaction.followup.send(f"**{symbol}** is already in your watchlist.", ephemeral=True)
         return
 
     await interaction.followup.send(
-        f"Added **{symbol}** to your watchlist.\n{market.format_quote(q)}",
+        f"Added **{symbol}** to your watchlist at **${added_price:,.2f}**. "
+        f"Your gain will be tracked from this price.\n{market.format_quote(q)}",
         ephemeral=True,
     )
 
@@ -177,34 +263,40 @@ async def watchlist_add(interaction: discord.Interaction, symbol: str):
 async def watchlist_remove(interaction: discord.Interaction, symbol: str):
     await interaction.response.defer(ephemeral=True)
     symbol = symbol.upper()
-    removed = await db.remove_from_member_watchlist(
-        interaction.guild_id, interaction.user.id, symbol
-    )
+    removed = await db.remove_from_member_watchlist(interaction.guild_id, interaction.user.id, symbol)
     if removed:
-        await interaction.followup.send(
-            f"Removed **{symbol}** from your watchlist.", ephemeral=True
-        )
+        await interaction.followup.send(f"Removed **{symbol}** from your watchlist.", ephemeral=True)
     else:
-        await interaction.followup.send(
-            f"**{symbol}** wasn't on your watchlist.", ephemeral=True
-        )
+        await interaction.followup.send(f"**{symbol}** wasn't on your watchlist.", ephemeral=True)
 
 
-@watchlist_group.command(name="view", description="View your personal watchlist with current prices")
+@watchlist_group.command(name="view", description="View your personal watchlist with gains since added")
 async def watchlist_view(interaction: discord.Interaction):
     await interaction.response.defer()
-    symbols = await db.get_member_watchlist(interaction.guild_id, interaction.user.id)
-    if not symbols:
+    entries = await db.get_member_watchlist_detailed(interaction.guild_id, interaction.user.id)
+    if not entries:
         await interaction.followup.send(
             "Your watchlist is empty. Use `/watchlist add SYMBOL` to start tracking stocks."
         )
         return
 
+    symbols = [e["symbol"] for e in entries]
     quotes = await market.get_quotes(symbols)
     lines = []
-    for sym in symbols:
+    for entry in entries:
+        sym = entry["symbol"]
+        added_price = entry.get("added_price")
         q = quotes.get(sym)
-        lines.append(market.format_quote(q) if q else f"**{sym}**  —  price unavailable")
+        if not q:
+            lines.append(f"**{sym}**  —  price unavailable")
+            continue
+        current = q.get("close") or 0
+        line = market.format_quote(q)
+        if added_price and added_price > 0:
+            gain_pct = (current - added_price) / added_price * 100
+            arrow = "📈" if gain_pct >= 0 else "📉"
+            line += f"  {arrow} {gain_pct:+.2f}% since added"
+        lines.append(line)
 
     embed = discord.Embed(
         title=f"{interaction.user.display_name}'s Watchlist",
@@ -222,9 +314,7 @@ bot.tree.add_command(watchlist_group)
 # /alert group
 # ---------------------------------------------------------------------------
 
-alert_group = app_commands.Group(
-    name="alert", description="Manage price movement alerts"
-)
+alert_group = app_commands.Group(name="alert", description="Manage price movement alerts")
 
 
 @alert_group.command(name="set", description="Set a price movement alert for a stock")
@@ -289,12 +379,10 @@ async def alert_list(interaction: discord.Interaction):
         await interaction.followup.send("You have no active alerts.", ephemeral=True)
         return
 
-    lines = []
-    for a in alerts:
-        lines.append(
-            f"`{str(a['id'])[:8]}` — **{a['symbol']}** {a['threshold_pct']}% ({a['direction']})"
-        )
-
+    lines = [
+        f"`{str(a['id'])[:8]}` — **{a['symbol']}** {a['threshold_pct']}% ({a['direction']})"
+        for a in alerts
+    ]
     embed = discord.Embed(
         title="Your Active Alerts",
         description="\n".join(lines),
@@ -309,215 +397,48 @@ async def alert_list(interaction: discord.Interaction):
 async def alert_remove(interaction: discord.Interaction, alert_id: str):
     await interaction.response.defer(ephemeral=True)
     alerts = await db.get_active_alerts(interaction.guild_id, interaction.user.id)
-    match = next(
-        (a for a in alerts if str(a["id"]).startswith(alert_id.strip())), None
-    )
+    match = next((a for a in alerts if str(a["id"]).startswith(alert_id.strip())), None)
     if not match:
         await interaction.followup.send(
             "Alert not found. Use `/alert list` to see your alerts.", ephemeral=True
         )
         return
-
     await db.deactivate_alert(match["id"])
-    await interaction.followup.send(
-        f"Removed alert for **{match['symbol']}**.", ephemeral=True
-    )
+    await interaction.followup.send(f"Removed alert for **{match['symbol']}**.", ephemeral=True)
 
 
 bot.tree.add_command(alert_group)
 
 
 # ---------------------------------------------------------------------------
-# /leaderboard
+# /leaderboard (on-demand, plain embed)
 # ---------------------------------------------------------------------------
 
-@bot.tree.command(name="leaderboard", description="View the server's paper-portfolio leaderboard")
+@bot.tree.command(name="leaderboard", description="View the server's stock-picking leaderboard")
 async def leaderboard(interaction: discord.Interaction):
     await interaction.response.defer()
 
-    rows = await db.get_leaderboard(interaction.guild_id)
-    if not rows:
+    rankings = await compute_leaderboard(interaction.guild)
+    if not rankings:
         await interaction.followup.send(
-            "No portfolio data yet. Members can paper-trade with `/portfolio buy`."
+            "No leaderboard data yet. Members need to add stocks with `/watchlist add` to appear here."
         )
         return
-
-    all_symbols = list({r["symbol"] for r in rows})
-    quotes = await market.get_quotes(all_symbols)
-
-    user_totals: dict[int, dict] = {}
-    for row in rows:
-        uid = row["user_id"]
-        sym = row["symbol"]
-        q = quotes.get(sym)
-        if not q:
-            continue
-        current = q.get("close") or 0
-        avg = row["avg_cost"] or 0
-        gain_pct = ((current - avg) / avg * 100) if avg else 0
-        if uid not in user_totals:
-            user_totals[uid] = {"total_pct": 0.0, "count": 0}
-        user_totals[uid]["total_pct"] += gain_pct
-        user_totals[uid]["count"] += 1
-
-    ranked = sorted(
-        user_totals.items(),
-        key=lambda x: x[1]["total_pct"] / max(x[1]["count"], 1),
-        reverse=True,
-    )
 
     medals = ["🥇", "🥈", "🥉"]
     lines = []
-    for i, (uid, stats) in enumerate(ranked[:10]):
-        avg_gain = stats["total_pct"] / max(stats["count"], 1)
-        prefix = medals[i] if i < 3 else f"{i+1}."
-        lines.append(f"{prefix} <@{uid}>  {avg_gain:+.2f}%")
+    for r in rankings[:10]:
+        prefix = medals[r["rank"] - 1] if r["rank"] <= 3 else f"{r['rank']}."
+        lines.append(f"{prefix} **{r['name']}**  {r['avg_gain']:+.2f}%  ({r['pick_count']} picks)")
 
     embed = discord.Embed(
-        title="📈 Portfolio Leaderboard",
-        description="\n".join(lines) if lines else "Not enough data yet.",
+        title="📈 Stock Picking Leaderboard",
+        description="\n".join(lines),
         color=discord.Color.gold(),
         timestamp=datetime.now(timezone.utc),
     )
-    embed.set_footer(text="Ranked by avg unrealized gain % across all holdings")
+    embed.set_footer(text="Ranked by avg % gain across watchlist picks since added")
     await interaction.followup.send(embed=embed)
-
-
-# ---------------------------------------------------------------------------
-# /portfolio group
-# ---------------------------------------------------------------------------
-
-portfolio_group = app_commands.Group(
-    name="portfolio", description="Paper-trade and track your virtual portfolio"
-)
-
-
-@portfolio_group.command(name="buy", description="Paper-buy shares of a stock")
-@app_commands.describe(symbol="Ticker symbol", shares="Number of shares to buy")
-async def portfolio_buy(interaction: discord.Interaction, symbol: str, shares: float):
-    await interaction.response.defer(ephemeral=True)
-    symbol = symbol.upper()
-
-    if shares <= 0:
-        await interaction.followup.send("Shares must be a positive number.", ephemeral=True)
-        return
-
-    q = await market.get_quote(symbol)
-    if not q:
-        await interaction.followup.send(f"**{symbol}** is not a valid ticker.", ephemeral=True)
-        return
-
-    price = q.get("close") or 0
-    holdings = await db.get_portfolio(interaction.guild_id, interaction.user.id)
-    existing = next((h for h in holdings if h["symbol"] == symbol), None)
-
-    if existing:
-        total_shares = existing["shares"] + shares
-        avg_cost = (existing["avg_cost"] * existing["shares"] + price * shares) / total_shares
-    else:
-        total_shares = shares
-        avg_cost = price
-
-    await db.upsert_portfolio_holding(
-        interaction.guild_id, interaction.user.id, symbol, total_shares, avg_cost
-    )
-    await db.log_trade(interaction.guild_id, interaction.user.id, symbol, "buy", shares, price)
-
-    await interaction.followup.send(
-        f"Bought **{shares:g} shares** of **{symbol}** at **${price:,.2f}**.\n"
-        f"Total position: {total_shares:g} shares @ avg ${avg_cost:,.2f}",
-        ephemeral=True,
-    )
-
-
-@portfolio_group.command(name="sell", description="Paper-sell shares of a stock")
-@app_commands.describe(symbol="Ticker symbol", shares="Number of shares to sell")
-async def portfolio_sell(interaction: discord.Interaction, symbol: str, shares: float):
-    await interaction.response.defer(ephemeral=True)
-    symbol = symbol.upper()
-
-    holdings = await db.get_portfolio(interaction.guild_id, interaction.user.id)
-    existing = next((h for h in holdings if h["symbol"] == symbol), None)
-
-    if not existing:
-        await interaction.followup.send(f"You don't hold any **{symbol}**.", ephemeral=True)
-        return
-
-    if shares > existing["shares"]:
-        await interaction.followup.send(
-            f"You only hold {existing['shares']:g} shares of **{symbol}**.", ephemeral=True
-        )
-        return
-
-    q = await market.get_quote(symbol)
-    price = (q.get("close") or 0) if q else existing["avg_cost"]
-
-    remaining = existing["shares"] - shares
-    if remaining < 0.001:
-        await db.remove_portfolio_holding(interaction.guild_id, interaction.user.id, symbol)
-    else:
-        await db.upsert_portfolio_holding(
-            interaction.guild_id, interaction.user.id, symbol, remaining, existing["avg_cost"]
-        )
-
-    await db.log_trade(interaction.guild_id, interaction.user.id, symbol, "sell", shares, price)
-
-    gain = (price - existing["avg_cost"]) * shares
-    gain_pct = ((price - existing["avg_cost"]) / existing["avg_cost"] * 100) if existing["avg_cost"] else 0
-
-    await interaction.followup.send(
-        f"Sold **{shares:g} shares** of **{symbol}** at **${price:,.2f}**.\n"
-        f"Realized P&L: **${gain:+,.2f}** ({gain_pct:+.2f}%)",
-        ephemeral=True,
-    )
-
-
-@portfolio_group.command(name="view", description="View your paper portfolio")
-async def portfolio_view(interaction: discord.Interaction):
-    await interaction.response.defer()
-    holdings = await db.get_portfolio(interaction.guild_id, interaction.user.id)
-
-    if not holdings:
-        await interaction.followup.send(
-            "Your portfolio is empty. Use `/portfolio buy SYMBOL SHARES` to start."
-        )
-        return
-
-    symbols = [h["symbol"] for h in holdings]
-    quotes = await market.get_quotes(symbols)
-
-    lines = []
-    total_value = 0.0
-    total_cost = 0.0
-    for h in holdings:
-        sym = h["symbol"]
-        q = quotes.get(sym)
-        current = (q.get("close") or 0) if q else 0
-        cost_basis = h["avg_cost"] * h["shares"]
-        market_value = current * h["shares"]
-        gain_pct = ((market_value - cost_basis) / cost_basis * 100) if cost_basis else 0
-        total_value += market_value
-        total_cost += cost_basis
-        lines.append(f"**{sym}**  {h['shares']:g} sh @ ${current:,.2f}  ({gain_pct:+.2f}%)")
-
-    total_gain = total_value - total_cost
-    total_gain_pct = (total_gain / total_cost * 100) if total_cost else 0
-
-    embed = discord.Embed(
-        title=f"{interaction.user.display_name}'s Portfolio",
-        description="\n".join(lines),
-        color=discord.Color.green() if total_gain >= 0 else discord.Color.red(),
-        timestamp=datetime.now(timezone.utc),
-    )
-    embed.add_field(
-        name="Total P&L",
-        value=f"${total_gain:+,.2f} ({total_gain_pct:+.2f}%)",
-        inline=False,
-    )
-    await interaction.followup.send(embed=embed)
-
-
-bot.tree.add_command(portfolio_group)
 
 
 # ---------------------------------------------------------------------------
@@ -531,15 +452,13 @@ setup_group = app_commands.Group(
 )
 
 
-@setup_group.command(name="channel", description="Set the channel where alerts and updates post")
+@setup_group.command(name="channel", description="Set the channel where alerts and leaderboards post")
 @app_commands.describe(channel="The channel to use for bot alerts")
 async def setup_channel(interaction: discord.Interaction, channel: discord.TextChannel):
     await interaction.response.defer(ephemeral=True)
     await db.register_guild(interaction.guild_id, interaction.guild.name, interaction.guild.owner_id)
     await db.set_alert_channel(interaction.guild_id, channel.id)
-    await interaction.followup.send(
-        f"Alert channel set to {channel.mention}.", ephemeral=True
-    )
+    await interaction.followup.send(f"Alert channel set to {channel.mention}.", ephemeral=True)
 
 
 @setup_group.command(name="info", description="View current bot configuration for this server")
@@ -562,7 +481,7 @@ bot.tree.add_command(setup_group)
 
 
 # ---------------------------------------------------------------------------
-# Background task: monitor alerts every 30 minutes
+# Background task: monitor price alerts every 30 minutes
 # ---------------------------------------------------------------------------
 
 @tasks.loop(minutes=30)
@@ -596,7 +515,6 @@ async def monitor_alerts():
                 or (direction == "up" and pct_change >= threshold)
                 or (direction == "down" and pct_change <= -threshold)
             )
-
             if not triggered:
                 continue
 
@@ -619,6 +537,68 @@ async def monitor_alerts():
 
 @monitor_alerts.before_loop
 async def before_monitor():
+    await bot.wait_until_ready()
+
+
+# ---------------------------------------------------------------------------
+# Background task: scheduled leaderboard at 4:05 PM ET on market days
+# Daily Mon-Thu, Weekly Fri, Monthly last Fri of month — no duplicates
+# ---------------------------------------------------------------------------
+
+@tasks.loop(minutes=1)
+async def scheduled_leaderboard():
+    now = datetime.now(ET)
+
+    if not (now.hour == 16 and now.minute == 5):
+        return
+
+    period = _get_leaderboard_period(now)
+    if period is None:
+        return
+
+    period_label = {"daily": "today", "weekly": "this week", "monthly": "this month"}[period]
+
+    try:
+        all_guilds = await db.get_all_guilds()
+    except Exception:
+        logging.exception("Failed to fetch guilds for scheduled leaderboard")
+        return
+
+    for guild_row in all_guilds:
+        guild_id = guild_row["id"]
+        post_key = f"{guild_id}:{now.date()}"
+        if post_key in _leaderboard_posted:
+            continue
+
+        guild = bot.get_guild(guild_id)
+        if not guild:
+            continue
+
+        try:
+            settings = await db.get_settings(guild_id)
+            channel_id = settings.get("alert_channel_id")
+            if not channel_id:
+                continue
+
+            channel = bot.get_channel(channel_id)
+            if not channel:
+                continue
+
+            rankings = await compute_leaderboard(guild)
+            if not rankings:
+                continue
+
+            text = await generate_brainrot_announcement(period_label, rankings)
+            await channel.send(text)
+            _leaderboard_posted.add(post_key)
+            logging.info(f"Posted {period} leaderboard to guild {guild_id}")
+
+        except Exception:
+            logging.exception(f"Failed to post leaderboard to guild {guild_id}")
+
+
+@scheduled_leaderboard.before_loop
+async def before_scheduled_leaderboard():
     await bot.wait_until_ready()
 
 

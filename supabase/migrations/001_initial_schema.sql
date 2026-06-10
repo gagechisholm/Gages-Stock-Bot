@@ -33,11 +33,12 @@ create table if not exists guild_settings (
 -- Member Watchlists (personal, per user per server)
 -- ============================================================
 create table if not exists member_watchlists (
-  id         uuid primary key default gen_random_uuid(),
-  guild_id   bigint references guilds(id) on delete cascade,
-  user_id    bigint not null,                         -- Discord user ID
-  symbol     text not null,
-  created_at timestamptz default now(),
+  id          uuid primary key default gen_random_uuid(),
+  guild_id    bigint references guilds(id) on delete cascade,
+  user_id     bigint not null,
+  symbol      text not null,
+  added_price numeric,
+  created_at  timestamptz default now(),
   unique(guild_id, user_id, symbol)
 );
 

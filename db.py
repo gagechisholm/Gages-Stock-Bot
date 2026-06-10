@@ -98,19 +98,44 @@ async def get_member_watchlist(guild_id: int, user_id: int) -> list[str]:
     return [row["symbol"] for row in (result.data or [])]
 
 
-async def add_to_member_watchlist(guild_id: int, user_id: int, symbol: str) -> bool:
+async def add_to_member_watchlist(
+    guild_id: int, user_id: int, symbol: str, added_price: float | None = None
+) -> bool:
     try:
-        await _run(lambda: get_client().table("member_watchlists").insert({
-            "guild_id": guild_id,
-            "user_id": user_id,
-            "symbol": symbol.upper(),
-        }).execute())
+        row = {"guild_id": guild_id, "user_id": user_id, "symbol": symbol.upper()}
+        if added_price is not None:
+            row["added_price"] = added_price
+        await _run(lambda: get_client().table("member_watchlists").insert(row).execute())
         return True
     except Exception as e:
         if "duplicate" in str(e).lower() or "unique" in str(e).lower():
             return False
         logging.exception(f"Error adding {symbol} to watchlist")
         return False
+
+
+async def get_member_watchlist_detailed(guild_id: int, user_id: int) -> list[dict]:
+    result = await _run(lambda: get_client().table("member_watchlists")
+        .select("symbol, added_price, created_at")
+        .eq("guild_id", guild_id)
+        .eq("user_id", user_id)
+        .execute())
+    return result.data or []
+
+
+async def get_all_guild_watchlists(guild_id: int) -> list[dict]:
+    """All watchlist entries for a guild with added_price, for leaderboard computation."""
+    result = await _run(lambda: get_client().table("member_watchlists")
+        .select("user_id, symbol, added_price")
+        .eq("guild_id", guild_id)
+        .not_.is_("added_price", "null")
+        .execute())
+    return result.data or []
+
+
+async def get_all_guilds() -> list[dict]:
+    result = await _run(lambda: get_client().table("guilds").select("id").execute())
+    return result.data or []
 
 
 async def remove_from_member_watchlist(guild_id: int, user_id: int, symbol: str) -> bool:
