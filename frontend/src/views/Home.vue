@@ -14,12 +14,12 @@
         </div>
 
         <h1 class="text-4xl sm:text-5xl lg:text-6xl font-bold text-white leading-[1.1] tracking-tight mb-5">
-          Your server needs
-          <span class="text-brand block">a stock NPC.</span>
+          Stocks with
+          <span class="text-brand block">the boys.</span>
         </h1>
 
         <p class="text-base sm:text-lg text-gray-400 max-w-lg mx-auto mb-10 leading-relaxed">
-          Track who&apos;s getting that bag, who&apos;s chopped, and never miss when a stock goes crazy.
+          Track the leaderboard. Let the bot do the roasting.
         </p>
 
         <a
