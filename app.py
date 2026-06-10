@@ -110,8 +110,8 @@ def stripe_checkout():
 
     try:
         session = stripe.checkout.Session.create(
-            payment_method_types=["card"],
             mode="subscription",
+            automatic_payment_methods={"enabled": True},
             line_items=[{"price": STRIPE_PRO_PRICE_ID, "quantity": 1}],
             metadata={"guild_id": guild_id},
             success_url=f"{FRONTEND_URL}?upgraded=true&guild_id={guild_id}",
@@ -145,11 +145,14 @@ def stripe_webhook():
     app.logger.info(f"Stripe webhook: {event_type}")
 
     if event_type == "checkout.session.completed":
-        session  = event["data"]["object"]
-        guild_id = session.get("metadata", {}).get("guild_id")
+        session     = event["data"]["object"]
+        guild_id    = session.get("metadata", {}).get("guild_id")
+        customer_id = session.get("customer")
         if guild_id:
             try:
                 asyncio.run(db.set_premium_tier(int(guild_id), "pro"))
+                if customer_id:
+                    asyncio.run(db.set_stripe_customer(int(guild_id), customer_id))
                 app.logger.info(f"Guild {guild_id} upgraded to pro")
             except Exception:
                 app.logger.exception(f"Failed to upgrade guild {guild_id}")
@@ -165,6 +168,33 @@ def stripe_webhook():
                 app.logger.exception(f"Failed to downgrade guild {guild_id}")
 
     return jsonify({"status": "ok"})
+
+
+# ---------------------------------------------------------------------------
+# Stripe — customer billing portal (manage/cancel subscription)
+# ---------------------------------------------------------------------------
+
+@app.route("/stripe/portal")
+@limiter.limit("20 per minute")
+def stripe_portal():
+    guild_id = request.args.get("guild_id")
+    if not guild_id:
+        return jsonify({"error": "guild_id required"}), 400
+
+    try:
+        guild = asyncio.run(db.get_guild(int(guild_id)))
+        customer_id = guild.get("stripe_customer_id") if guild else None
+        if not customer_id:
+            return jsonify({"error": "No billing account found"}), 404
+
+        session = stripe.billing_portal.Session.create(
+            customer=customer_id,
+            return_url=f"{FRONTEND_URL}?guild_id={guild_id}",
+        )
+        return redirect(session.url)
+    except Exception:
+        app.logger.exception("Stripe portal creation failed")
+        return jsonify({"error": "Failed to open billing portal"}), 500
 
 
 # ---------------------------------------------------------------------------

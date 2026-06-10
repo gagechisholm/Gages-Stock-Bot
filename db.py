@@ -58,6 +58,13 @@ async def set_premium_tier(guild_id: int, tier: str) -> None:
         .execute())
 
 
+async def set_stripe_customer(guild_id: int, customer_id: str) -> None:
+    await _run(lambda: get_client().table("guilds")
+        .update({"stripe_customer_id": customer_id})
+        .eq("id", guild_id)
+        .execute())
+
+
 # ---------------------------------------------------------------------------
 # Guild Settings
 # ---------------------------------------------------------------------------
