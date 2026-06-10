@@ -60,6 +60,52 @@ async def on_guild_join(guild: discord.Guild):
     logging.info(f"Joined guild: {guild.name} ({guild.id})")
     await db.register_guild(guild.id, guild.name, guild.owner_id)
 
+    embed = discord.Embed(
+        title="StockNPC is here!",
+        description=(
+            "Thanks for adding StockNPC. Here's how to get started:\n\n"
+            "**Step 1 — Set an alert channel (admin only)**\n"
+            "Run `/setup channel #your-channel` to choose where price alerts post.\n\n"
+            "**Step 2 — Start using commands**"
+        ),
+        color=discord.Color.green(),
+    )
+    embed.add_field(
+        name="/quote",
+        value="Get the current price of any stock",
+        inline=False,
+    )
+    embed.add_field(
+        name="/watchlist add/remove/view",
+        value="Track stocks on your personal watchlist",
+        inline=False,
+    )
+    embed.add_field(
+        name="/alert set/list/remove",
+        value="Get notified when a stock moves by a % you set",
+        inline=False,
+    )
+    embed.add_field(
+        name="/portfolio buy/sell/view",
+        value="Paper-trade and track a virtual portfolio",
+        inline=False,
+    )
+    embed.add_field(
+        name="/leaderboard",
+        value="See who's winning the paper-trading competition",
+        inline=False,
+    )
+    embed.set_footer(text="Run /setup info at any time to check your configuration.")
+
+    channel = guild.system_channel
+    if channel is None:
+        channel = next(
+            (c for c in guild.text_channels if c.permissions_for(guild.me).send_messages),
+            None,
+        )
+    if channel:
+        await channel.send(embed=embed)
+
 
 # ---------------------------------------------------------------------------
 # /quote
