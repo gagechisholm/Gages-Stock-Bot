@@ -1,853 +1,588 @@
 import discord
-import os
-import random
+from discord import app_commands
+from discord.ext import commands, tasks
 import asyncio
-import requests
-import logging
-import time
-from datetime import datetime
+import os
 import logging
 import sys
-import psycopg2
-from psycopg2.extras import DictCursor
-import signal
-import requests
-import aiohttp
+from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
+from dotenv import load_dotenv
 
-# UPDATE MESSAGE
-update_message = (
-    "**📢 Update Notification 📢**\n\n"
-    "🚀 **What's New in Gage's Stock Bot** 🚀\n\n"
-    "1. **Individual Watchlists**: Track your own stocks separately from others in the server. "
-    "Your watchlist is private to you, and you can add or remove stocks as you like.\n\n"
-    "2. **Leaderboard**: Compete with other users! See the best-performing watchlists based on daily percentage changes. "
-    "The leaderboard updates every day after market close.\n\n"
-    "3. **Automatic Update Summaries**: Whenever the bot restarts, this message will notify you about recent updates and improvements.\n\n"
-    "**Commands Refresher**:\n\n"
-    "- Use `!addstock SYMBOL` to add a stock to your watchlist.\n\n"
-    "- Use `!watchlist` to view your tracked stocks.\n\n"
-    "- Set a channel for notifications with `!setchannel`.\n\n"
-    "- View the leaderboard with `!leaderboard`.\n\n"
-    "- Customize stock alert thresholds with `!set PERCENTAGE`.\n\n"
-    "For detailed help, type `!help`.\n\n\n"
-    "Thank you for your continued support 💼📈"
-)
+import market
+import db
 
-# Logging Configuration
+load_dotenv()
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
 handler = RotatingFileHandler("app.log", maxBytes=10 * 1024 * 1024, backupCount=5)
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[
-        handler,  # Rotating file handler
-        logging.StreamHandler(sys.stdout)  # Console output
-    ]
+    handlers=[handler, logging.StreamHandler(sys.stdout)],
 )
 
-logging.info("Bot has started.")
+# ---------------------------------------------------------------------------
+# Bot setup
+# ---------------------------------------------------------------------------
 
-# Heroku API Key (For User Restarts)
-HEROKU_API_KEY = heroku_api_key = os.getenv("HEROKU_API_KEY")
-if not HEROKU_API_KEY:
-    logging.warning("HEROKU_API_KEY is not set. Stock price fetches may fail.")
-
-HEROKU_APP_NAME = heroku_app_name = os.getenv("HEROKU_APP_NAME")
-if not HEROKU_APP_NAME:
-    logging.warning("HEROKU_APP_NAME is not set. Stock price fetches may fail.")
-
-# Discord client setup
 intents = discord.Intents.default()
-intents.message_content = True
-client = discord.Client(intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Finnhub API Key
-FINNHUB_API_KEY = os.getenv('FINNHUB_API_KEY')
-if not FINNHUB_API_KEY:
-    logging.warning("FINNHUB_API_KEY is not set. Stock price fetches may fail.")
-
-STOCK_API_URL = "https://finnhub.io/api/v1/quote?symbol={symbol}&token={apikey}"
-
-# SQLite database file
-DB_FILE = "stocks.db"
-
-# Universal request tracking
-request_count = 0
-MONTHLY_LIMIT = 30000
-
-# Database URL
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    logging.error("DATABASE_URL environment variable not found. Cannot connect to PostgreSQL.")
-    exit(1)
-else:
-    logging.info("Successfully Connected to PostgreSQL.")
-
-# Thresholds for stock change alerts (default to 5% per guild)
-alert_thresholds = {}
-
-# Helper: Get reusable database connection
-def get_db_connection(retries=3, delay=2):
-    for attempt in range(retries):
-        try:
-            conn = psycopg2.connect(DATABASE_URL, sslmode='require', cursor_factory=DictCursor)
-            return conn
-        except psycopg2.OperationalError as e:
-            logging.warning(f"Database connection failed (attempt {attempt + 1}/{retries}): {e}")
-            if attempt < retries - 1:
-                time.sleep(delay)
-    logging.error("Failed to connect to the database after retries.")
-    raise Exception("Database connection failed.")
+PREMIUM_PRO_SKU_ID = os.environ.get("PREMIUM_PRO_SKU_ID")
+PREMIUM_PLUS_SKU_ID = os.environ.get("PREMIUM_PLUS_SKU_ID")
 
 
-# Initialize the database
-def initialize_db():
-    try:
-        with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                # Create the stocks table
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS stocks (
-                        guild_id BIGINT,
-                        user_id BIGINT,
-                        symbol TEXT,
-                        last_price FLOAT,
-                        PRIMARY KEY (guild_id, user_id, symbol)
-                    )
-                """)
-                logging.info("Stocks table checked/created.")
-                
-                # Create the API usage table
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS api_usage (
-                        request_count INTEGER,
-                        reset_date TIMESTAMP
-                    )
-                """)
-                logging.info("API usage table checked/created.")
-                
-                # Create the settings table
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS settings (
-                        guild_id BIGINT PRIMARY KEY,
-                        update_channel_id BIGINT
-                    )
-                """)
-                logging.info("Settings table checked/created.")
-                
-                # Create leaderboard table
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS leaderboard (
-                        date DATE,
-                        user_id BIGINT,
-                        username TEXT,
-                        guild_id BIGINT,
-                        score FLOAT,
-                        PRIMARY KEY (date, user_id, guild_id)
-                    )
-                """)
-                logging.info("Leaderboard table checked/created.")
-
-                # Initialize API usage if missing
-                cursor.execute("SELECT COUNT(*) FROM api_usage")
-                if cursor.fetchone()[0] == 0:
-                    cursor.execute(
-                        "INSERT INTO api_usage (request_count, reset_date) VALUES (%s, %s)",
-                        (0, next_reset_date())
-                    )
-                logging.info("API usage initialized.")
-                    
-                # Create thresholds table
-                cursor.execute("""
-                CREATE TABLE IF NOT EXISTS thresholds (
-                    user_id BIGINT,
-                    guild_id BIGINT,
-                    threshold FLOAT,
-                    PRIMARY KEY (user_id, guild_id)
-                )
-            """)
-                logging.info("Thresholds table checked/created.")
-                
-                conn.commit()
-                
-    except Exception as e:
-        logging.exception("Database initialization failed.")
+async def has_premium(guild_id: int) -> bool:
+    return await db.is_premium(guild_id)
 
 
+# ---------------------------------------------------------------------------
+# Bot events
+# ---------------------------------------------------------------------------
 
-
-# Calculate next reset date for API requests
-def next_reset_date():
-    now = datetime.now()
-    next_month = (now.month % 12) + 1
-    year = now.year if next_month > 1 else now.year + 1
-    return datetime(year, next_month, 1).strftime("%Y-%m-%d %H:%M:%S")
-
-
-# Update API usage in the database
-def update_request_count():
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT request_count, reset_date FROM api_usage")
-        current_count, reset_date = cursor.fetchone()
-        if isinstance(reset_date, str):
-            reset_date = datetime.strptime(reset_date, "%Y-%m-%d %H:%M:%S")
-
-
-        if datetime.now() >= reset_date:
-            current_count = 0
-            reset_date = next_reset_date()
-            cursor.execute(
-                "UPDATE api_usage SET request_count = %s, reset_date = %s",
-                (current_count, reset_date.strftime("%Y-%m-%d %H:%M:%S"))
-            )
-        current_count += 1
-        cursor.execute("UPDATE api_usage SET request_count = %s", (current_count,))
-        conn.commit()
-
-def get_request_count():
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT request_count, reset_date FROM api_usage")
-        return cursor.fetchone()
-
-
-def load_stocks(guild_id, user_id):
-    with get_db_connection() as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("SELECT symbol, last_price FROM stocks WHERE guild_id = %s AND user_id = %s", (guild_id, user_id))
-            return {row["symbol"]: row["last_price"] for row in cursor.fetchall()}
-
-
-
-
-def save_stock(guild_id, user_id, symbol, last_price=None):
-    with get_db_connection() as conn:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "INSERT INTO stocks (guild_id, user_id, symbol, last_price) VALUES (%s, %s, %s, %s) "
-                "ON CONFLICT (guild_id, user_id, symbol) DO UPDATE SET last_price = EXCLUDED.last_price",
-                (guild_id, user_id, symbol, last_price)
-            )
-            conn.commit()
-
-        
-        
-def remove_stock(guild_id, user_id, symbol):
-    with get_db_connection() as conn:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "DELETE FROM stocks WHERE guild_id = %s AND user_id = %s AND symbol = %s",
-                (guild_id, user_id, symbol)
-            )
-            conn.commit()
-
-        
-def set_update_channel(guild_id, channel_id):
-    with get_db_connection() as conn:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "INSERT INTO settings (guild_id, update_channel_id) VALUES (%s, %s) "
-                "ON CONFLICT (guild_id) DO UPDATE SET update_channel_id = EXCLUDED.update_channel_id",
-                (guild_id, channel_id)
-            )
-            conn.commit()
-
-
-def get_update_channel(guild_id):
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT update_channel_id FROM settings WHERE guild_id = %s", (guild_id,))
-        row = cursor.fetchone()
-        return row["update_channel_id"] if row else None
-    
-def shutdown_handler(signum, frame):
-    logging.info(f"Received signal {signum}. Initiating shutdown...")
-    loop = asyncio.get_event_loop()
-    asyncio.create_task(client.close())
-    loop.stop()
-    
-def calculate_daily_performance():
-    logging.info(f"Calculating daily performance for leaderboard.")
-    today = datetime.now().date()
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-
-        # Fetch distinct users and their stocks
-        cursor.execute("SELECT DISTINCT user_id, guild_id FROM stocks")
-        users = cursor.fetchall()
-
-        leaderboard_updates = []
-
-        for user in users:
-            logging.info(f"Fetching {user}")
-            user_id, guild_id = user
-            cursor.execute("""
-                SELECT symbol, last_price FROM stocks 
-                WHERE user_id = %s AND guild_id = %s
-            """, (user_id, guild_id))
-
-            stocks = cursor.fetchall()
-            total_percent_change = 0
-            count = 0
-
-            for stock in stocks:
-                logging.info(f"Parsing {user}'s Watchlist")
-                symbol, last_price = stock
-                current_price = asyncio.run(fetch_stock_price(symbol))
-
-                if current_price and last_price:
-                    percent_change = ((current_price - last_price) / last_price) * 100
-                    total_percent_change += percent_change
-                    count += 1
-
-            # Calculate average percentage change for the user
-            if count > 0:
-                avg_percent_change = total_percent_change / count
-                cursor.execute("SELECT username FROM users WHERE user_id = %s", (user_id,))
-                username = cursor.fetchone()
-                leaderboard_updates.append((today, user_id, username, guild_id, avg_percent_change))
-
-        # Insert updates into the leaderboard table
-        for update in leaderboard_updates:
-            cursor.execute("""
-                INSERT INTO leaderboard (date, user_id, username, guild_id, score)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (date, user_id, guild_id) DO UPDATE
-                SET score = EXCLUDED.score
-            """, update)
-
-        conn.commit()
-        logging.info(f"Calculation complete.")
-
-def check_rank(user_id, guild_id):
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT RANK() OVER (ORDER BY score DESC) AS rank
-                FROM leaderboard
-                WHERE date = %s AND guild_id = %s AND user_id = %s
-            """, (datetime.now().date(), guild_id, user_id))
-            result = cursor.fetchone()
-            return result["rank"] if result else None
-    except Exception as e:
-        logging.exception(f"Unable to fetch ranking for user {user_id} in guild {guild_id}.")
-        return None
-
-async def update_leaderboard():
-    await client.wait_until_ready()
-    while not client.is_closed():
-        now = datetime.now()
-        # Run at 4:00 PM daily (market close)
-        if now.hour == 16 and now.minute == 0:
-            logging.info("Updating leaderboard...")
-            calculate_daily_performance()
-            logging.info("Leaderboard updated.")
-        await asyncio.sleep(1800)  # Check every 30 minutes
-
-async def shutdown():
-    await client.close()
-    tasks = [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
-    [task.cancel() for task in tasks]
-    await asyncio.gather(*tasks, return_exceptions=True)
-
-@client.event
+@bot.event
 async def on_ready():
-    logging.info(f"Logged in as {client.user}")
-    
-        # Fetch all guilds where the bot is a member
-    guilds = client.guilds
+    logging.info(f"Logged in as {bot.user} ({bot.user.id})")
+    try:
+        synced = await bot.tree.sync()
+        logging.info(f"Synced {len(synced)} slash commands globally")
+    except Exception:
+        logging.exception("Failed to sync slash commands")
+    monitor_alerts.start()
 
-    for guild in guilds:
-        try:
-            # Fetch the update channel for this guild
-            update_channel_id = get_update_channel(guild.id)
 
-            if update_channel_id:
-                # Get the channel object
-                channel = client.get_channel(update_channel_id)
+@bot.event
+async def on_guild_join(guild: discord.Guild):
+    logging.info(f"Joined guild: {guild.name} ({guild.id})")
+    await db.register_guild(guild.id, guild.name, guild.owner_id)
 
-                if channel:
-                    await channel.send(update_message)
-                    logging.info(f"Sent update summary to {guild.name} in channel {channel.name}")
-                else:
-                    logging.warning(f"Channel ID {update_channel_id} not found for guild {guild.name}")
-            else:
-                logging.info(f"No update channel set for guild {guild.name}")
 
-        except Exception as e:
-            logging.exception(f"Failed to send update message for guild {guild.name}: {e}")
+# ---------------------------------------------------------------------------
+# /quote
+# ---------------------------------------------------------------------------
 
-    asyncio.create_task(monitor_stock_changes())
-    asyncio.create_task(update_leaderboard())
-
-@client.event
-async def on_message(message):
-    global request_count
-
-    if message.author == client.user:
-        return
-
-    user_id = message.author.id # Unique ID for the user
-    guild_id = message.guild.id  # Unique ID for the server
-
-    if message.content.startswith("!help"):
-        help_message = (
-            "``` Stock Bot Commands ```\n"
-            "1. **!addstock SYMBOL** - Adds a stock to your personal tracking list (e.g., `!addstock AAPL`).\n\n"
-            "2. **!addstocks SYMBOL1 SYMBOL2 ...** - Adds multiple stocks to your personal tracking list at once (e.g., `!addstocks AAPL TSLA AMZN`).\n\n"
-            "3. **!removestock SYMBOL** - Removes a stock from your personal tracking list (e.g., `!removestock TSLA`).\n\n"
-            "4. **!watchlist** - Displays your current stock watchlist with the latest prices.\n\n"
-            "5. **!requests** - Shows how many API requests have been used out of the monthly limit.\n\n"
-            "6. **!price SYMBOL** - Shows the current price of a specific stock (e.g., `!price TSLA`).\n\n"
-            "7. **!set PERCENTAGE** - Sets the percentage threshold for stock change alerts (e.g., `!setthreshold 10`).\n\n"
-            "8. **!setchannel** - Sets the current channel as the default for stock update notifications.\n\n"
-            "9. **!leaderboard** - Displays the leaderboard for today, showing users with the best-performing watchlists.\n\n"
-            "10. **!69** - Gives you a nice compliment.\n\n"
-            "11. **!imbored** - For when you're bored.\n\n"
-            "12. **!help** - Displays this help message.\n\n"
-            "```Once a stock is added to your watchlist, the bot will monitor its price. Daily performance is tracked, and the leaderboard is updated at market close.```"
+@bot.tree.command(name="quote", description="Look up the current price of a stock")
+@app_commands.describe(symbol="Ticker symbol (e.g. AAPL, TSLA, SPY)")
+async def quote(interaction: discord.Interaction, symbol: str):
+    await interaction.response.defer()
+    q = await market.get_quote(symbol)
+    if not q:
+        await interaction.followup.send(
+            f"Could not find a price for **{symbol.upper()}**. "
+            "Double-check the ticker symbol.",
+            ephemeral=True,
         )
-        await message.channel.send(help_message)
-        logging.info(f"HELP command received from {message.author}: {message.content}")
         return
-    
-    if message.content.startswith("!restart"):
-        logging.info(f"Restart command received from {message.author}")
-        if not HEROKU_API_KEY or not HEROKU_APP_NAME:
-            logging.info(f"Heroku API key or app name not configured - {message.author}: {message.content}")
-            await message.channel.send("Heroku API key or app name not configured.")
+    await interaction.followup.send(market.format_quote(q))
+
+
+# ---------------------------------------------------------------------------
+# /watchlist group
+# ---------------------------------------------------------------------------
+
+watchlist_group = app_commands.Group(
+    name="watchlist", description="Manage your personal stock watchlist"
+)
+
+
+@watchlist_group.command(name="add", description="Add a stock to your personal watchlist")
+@app_commands.describe(symbol="Ticker symbol to add (e.g. AAPL)")
+async def watchlist_add(interaction: discord.Interaction, symbol: str):
+    await interaction.response.defer(ephemeral=True)
+    symbol = symbol.upper()
+
+    current_list = await db.get_member_watchlist(interaction.guild_id, interaction.user.id)
+    if len(current_list) >= 10 and not await has_premium(interaction.guild_id):
+        await interaction.followup.send(
+            "Free watchlists are limited to 10 stocks. "
+            "Upgrade to Pro to add more.",
+            ephemeral=True,
+        )
+        return
+
+    q = await market.get_quote(symbol)
+    if not q:
+        await interaction.followup.send(
+            f"**{symbol}** doesn't look like a valid ticker. "
+            "Check the symbol and try again.",
+            ephemeral=True,
+        )
+        return
+
+    added = await db.add_to_member_watchlist(interaction.guild_id, interaction.user.id, symbol)
+    if not added:
+        await interaction.followup.send(
+            f"**{symbol}** is already in your watchlist.", ephemeral=True
+        )
+        return
+
+    await interaction.followup.send(
+        f"Added **{symbol}** to your watchlist.\n{market.format_quote(q)}",
+        ephemeral=True,
+    )
+
+
+@watchlist_group.command(name="remove", description="Remove a stock from your personal watchlist")
+@app_commands.describe(symbol="Ticker symbol to remove")
+async def watchlist_remove(interaction: discord.Interaction, symbol: str):
+    await interaction.response.defer(ephemeral=True)
+    symbol = symbol.upper()
+    removed = await db.remove_from_member_watchlist(
+        interaction.guild_id, interaction.user.id, symbol
+    )
+    if removed:
+        await interaction.followup.send(
+            f"Removed **{symbol}** from your watchlist.", ephemeral=True
+        )
+    else:
+        await interaction.followup.send(
+            f"**{symbol}** wasn't on your watchlist.", ephemeral=True
+        )
+
+
+@watchlist_group.command(name="view", description="View your personal watchlist with current prices")
+async def watchlist_view(interaction: discord.Interaction):
+    await interaction.response.defer()
+    symbols = await db.get_member_watchlist(interaction.guild_id, interaction.user.id)
+    if not symbols:
+        await interaction.followup.send(
+            "Your watchlist is empty. Use `/watchlist add SYMBOL` to start tracking stocks."
+        )
+        return
+
+    quotes = await market.get_quotes(symbols)
+    lines = []
+    for sym in symbols:
+        q = quotes.get(sym)
+        lines.append(market.format_quote(q) if q else f"**{sym}**  —  price unavailable")
+
+    embed = discord.Embed(
+        title=f"{interaction.user.display_name}'s Watchlist",
+        description="\n".join(lines),
+        color=discord.Color.blue(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    await interaction.followup.send(embed=embed)
+
+
+bot.tree.add_command(watchlist_group)
+
+
+# ---------------------------------------------------------------------------
+# /alert group
+# ---------------------------------------------------------------------------
+
+alert_group = app_commands.Group(
+    name="alert", description="Manage price movement alerts"
+)
+
+
+@alert_group.command(name="set", description="Set a price movement alert for a stock")
+@app_commands.describe(
+    symbol="Ticker symbol (e.g. AAPL)",
+    threshold="Percentage move to trigger alert (e.g. 5 for 5%)",
+    direction="Direction to watch: up, down, or both",
+)
+@app_commands.choices(direction=[
+    app_commands.Choice(name="Both directions", value="both"),
+    app_commands.Choice(name="Up only", value="up"),
+    app_commands.Choice(name="Down only", value="down"),
+])
+async def alert_set(
+    interaction: discord.Interaction,
+    symbol: str,
+    threshold: float,
+    direction: str = "both",
+):
+    await interaction.response.defer(ephemeral=True)
+    symbol = symbol.upper()
+
+    settings = await db.get_settings(interaction.guild_id)
+    channel_id = settings.get("alert_channel_id")
+    if not channel_id:
+        await interaction.followup.send(
+            "No alert channel configured. An admin must run `/setup channel` first.",
+            ephemeral=True,
+        )
+        return
+
+    q = await market.get_quote(symbol)
+    if not q:
+        await interaction.followup.send(
+            f"**{symbol}** doesn't look like a valid ticker.", ephemeral=True
+        )
+        return
+
+    alert = await db.create_alert(
+        guild_id=interaction.guild_id,
+        user_id=interaction.user.id,
+        symbol=symbol,
+        threshold_pct=abs(threshold),
+        direction=direction,
+        channel_id=channel_id,
+    )
+    if alert:
+        await interaction.followup.send(
+            f"Alert set: notify when **{symbol}** moves {threshold}% ({direction}) "
+            f"from its current price of ${q.get('close', 0):,.2f}.",
+            ephemeral=True,
+        )
+    else:
+        await interaction.followup.send("Failed to create alert. Try again.", ephemeral=True)
+
+
+@alert_group.command(name="list", description="View your active alerts")
+async def alert_list(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    alerts = await db.get_active_alerts(interaction.guild_id, interaction.user.id)
+    if not alerts:
+        await interaction.followup.send("You have no active alerts.", ephemeral=True)
+        return
+
+    lines = []
+    for a in alerts:
+        lines.append(
+            f"`{str(a['id'])[:8]}` — **{a['symbol']}** {a['threshold_pct']}% ({a['direction']})"
+        )
+
+    embed = discord.Embed(
+        title="Your Active Alerts",
+        description="\n".join(lines),
+        color=discord.Color.orange(),
+    )
+    embed.set_footer(text="Use /alert remove <id> to cancel an alert")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+@alert_group.command(name="remove", description="Remove a price alert")
+@app_commands.describe(alert_id="The alert ID prefix shown in /alert list")
+async def alert_remove(interaction: discord.Interaction, alert_id: str):
+    await interaction.response.defer(ephemeral=True)
+    alerts = await db.get_active_alerts(interaction.guild_id, interaction.user.id)
+    match = next(
+        (a for a in alerts if str(a["id"]).startswith(alert_id.strip())), None
+    )
+    if not match:
+        await interaction.followup.send(
+            "Alert not found. Use `/alert list` to see your alerts.", ephemeral=True
+        )
+        return
+
+    await db.deactivate_alert(match["id"])
+    await interaction.followup.send(
+        f"Removed alert for **{match['symbol']}**.", ephemeral=True
+    )
+
+
+bot.tree.add_command(alert_group)
+
+
+# ---------------------------------------------------------------------------
+# /leaderboard
+# ---------------------------------------------------------------------------
+
+@bot.tree.command(name="leaderboard", description="View the server's paper-portfolio leaderboard")
+async def leaderboard(interaction: discord.Interaction):
+    await interaction.response.defer()
+
+    rows = await db.get_leaderboard(interaction.guild_id)
+    if not rows:
+        await interaction.followup.send(
+            "No portfolio data yet. Members can paper-trade with `/portfolio buy`."
+        )
+        return
+
+    all_symbols = list({r["symbol"] for r in rows})
+    quotes = await market.get_quotes(all_symbols)
+
+    user_totals: dict[int, dict] = {}
+    for row in rows:
+        uid = row["user_id"]
+        sym = row["symbol"]
+        q = quotes.get(sym)
+        if not q:
+            continue
+        current = q.get("close") or 0
+        avg = row["avg_cost"] or 0
+        gain_pct = ((current - avg) / avg * 100) if avg else 0
+        if uid not in user_totals:
+            user_totals[uid] = {"total_pct": 0.0, "count": 0}
+        user_totals[uid]["total_pct"] += gain_pct
+        user_totals[uid]["count"] += 1
+
+    ranked = sorted(
+        user_totals.items(),
+        key=lambda x: x[1]["total_pct"] / max(x[1]["count"], 1),
+        reverse=True,
+    )
+
+    medals = ["🥇", "🥈", "🥉"]
+    lines = []
+    for i, (uid, stats) in enumerate(ranked[:10]):
+        avg_gain = stats["total_pct"] / max(stats["count"], 1)
+        prefix = medals[i] if i < 3 else f"{i+1}."
+        lines.append(f"{prefix} <@{uid}>  {avg_gain:+.2f}%")
+
+    embed = discord.Embed(
+        title="📈 Portfolio Leaderboard",
+        description="\n".join(lines) if lines else "Not enough data yet.",
+        color=discord.Color.gold(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.set_footer(text="Ranked by avg unrealized gain % across all holdings")
+    await interaction.followup.send(embed=embed)
+
+
+# ---------------------------------------------------------------------------
+# /portfolio group
+# ---------------------------------------------------------------------------
+
+portfolio_group = app_commands.Group(
+    name="portfolio", description="Paper-trade and track your virtual portfolio"
+)
+
+
+@portfolio_group.command(name="buy", description="Paper-buy shares of a stock")
+@app_commands.describe(symbol="Ticker symbol", shares="Number of shares to buy")
+async def portfolio_buy(interaction: discord.Interaction, symbol: str, shares: float):
+    await interaction.response.defer(ephemeral=True)
+    symbol = symbol.upper()
+
+    if shares <= 0:
+        await interaction.followup.send("Shares must be a positive number.", ephemeral=True)
+        return
+
+    q = await market.get_quote(symbol)
+    if not q:
+        await interaction.followup.send(f"**{symbol}** is not a valid ticker.", ephemeral=True)
+        return
+
+    price = q.get("close") or 0
+    holdings = await db.get_portfolio(interaction.guild_id, interaction.user.id)
+    existing = next((h for h in holdings if h["symbol"] == symbol), None)
+
+    if existing:
+        total_shares = existing["shares"] + shares
+        avg_cost = (existing["avg_cost"] * existing["shares"] + price * shares) / total_shares
+    else:
+        total_shares = shares
+        avg_cost = price
+
+    await db.upsert_portfolio_holding(
+        interaction.guild_id, interaction.user.id, symbol, total_shares, avg_cost
+    )
+    await db.log_trade(interaction.guild_id, interaction.user.id, symbol, "buy", shares, price)
+
+    await interaction.followup.send(
+        f"Bought **{shares:g} shares** of **{symbol}** at **${price:,.2f}**.\n"
+        f"Total position: {total_shares:g} shares @ avg ${avg_cost:,.2f}",
+        ephemeral=True,
+    )
+
+
+@portfolio_group.command(name="sell", description="Paper-sell shares of a stock")
+@app_commands.describe(symbol="Ticker symbol", shares="Number of shares to sell")
+async def portfolio_sell(interaction: discord.Interaction, symbol: str, shares: float):
+    await interaction.response.defer(ephemeral=True)
+    symbol = symbol.upper()
+
+    holdings = await db.get_portfolio(interaction.guild_id, interaction.user.id)
+    existing = next((h for h in holdings if h["symbol"] == symbol), None)
+
+    if not existing:
+        await interaction.followup.send(f"You don't hold any **{symbol}**.", ephemeral=True)
+        return
+
+    if shares > existing["shares"]:
+        await interaction.followup.send(
+            f"You only hold {existing['shares']:g} shares of **{symbol}**.", ephemeral=True
+        )
+        return
+
+    q = await market.get_quote(symbol)
+    price = (q.get("close") or 0) if q else existing["avg_cost"]
+
+    remaining = existing["shares"] - shares
+    if remaining < 0.001:
+        await db.remove_portfolio_holding(interaction.guild_id, interaction.user.id, symbol)
+    else:
+        await db.upsert_portfolio_holding(
+            interaction.guild_id, interaction.user.id, symbol, remaining, existing["avg_cost"]
+        )
+
+    await db.log_trade(interaction.guild_id, interaction.user.id, symbol, "sell", shares, price)
+
+    gain = (price - existing["avg_cost"]) * shares
+    gain_pct = ((price - existing["avg_cost"]) / existing["avg_cost"] * 100) if existing["avg_cost"] else 0
+
+    await interaction.followup.send(
+        f"Sold **{shares:g} shares** of **{symbol}** at **${price:,.2f}**.\n"
+        f"Realized P&L: **${gain:+,.2f}** ({gain_pct:+.2f}%)",
+        ephemeral=True,
+    )
+
+
+@portfolio_group.command(name="view", description="View your paper portfolio")
+async def portfolio_view(interaction: discord.Interaction):
+    await interaction.response.defer()
+    holdings = await db.get_portfolio(interaction.guild_id, interaction.user.id)
+
+    if not holdings:
+        await interaction.followup.send(
+            "Your portfolio is empty. Use `/portfolio buy SYMBOL SHARES` to start."
+        )
+        return
+
+    symbols = [h["symbol"] for h in holdings]
+    quotes = await market.get_quotes(symbols)
+
+    lines = []
+    total_value = 0.0
+    total_cost = 0.0
+    for h in holdings:
+        sym = h["symbol"]
+        q = quotes.get(sym)
+        current = (q.get("close") or 0) if q else 0
+        cost_basis = h["avg_cost"] * h["shares"]
+        market_value = current * h["shares"]
+        gain_pct = ((market_value - cost_basis) / cost_basis * 100) if cost_basis else 0
+        total_value += market_value
+        total_cost += cost_basis
+        lines.append(f"**{sym}**  {h['shares']:g} sh @ ${current:,.2f}  ({gain_pct:+.2f}%)")
+
+    total_gain = total_value - total_cost
+    total_gain_pct = (total_gain / total_cost * 100) if total_cost else 0
+
+    embed = discord.Embed(
+        title=f"{interaction.user.display_name}'s Portfolio",
+        description="\n".join(lines),
+        color=discord.Color.green() if total_gain >= 0 else discord.Color.red(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(
+        name="Total P&L",
+        value=f"${total_gain:+,.2f} ({total_gain_pct:+.2f}%)",
+        inline=False,
+    )
+    await interaction.followup.send(embed=embed)
+
+
+bot.tree.add_command(portfolio_group)
+
+
+# ---------------------------------------------------------------------------
+# /setup group (admin only)
+# ---------------------------------------------------------------------------
+
+setup_group = app_commands.Group(
+    name="setup",
+    description="Configure the bot for this server (admin only)",
+    default_permissions=discord.Permissions(manage_guild=True),
+)
+
+
+@setup_group.command(name="channel", description="Set the channel where alerts and updates post")
+@app_commands.describe(channel="The channel to use for bot alerts")
+async def setup_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+    await interaction.response.defer(ephemeral=True)
+    await db.register_guild(interaction.guild_id, interaction.guild.name, interaction.guild.owner_id)
+    await db.set_alert_channel(interaction.guild_id, channel.id)
+    await interaction.followup.send(
+        f"Alert channel set to {channel.mention}.", ephemeral=True
+    )
+
+
+@setup_group.command(name="info", description="View current bot configuration for this server")
+async def setup_info(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    settings = await db.get_settings(interaction.guild_id)
+    guild = await db.get_guild(interaction.guild_id)
+
+    channel_id = settings.get("alert_channel_id")
+    channel_mention = f"<#{channel_id}>" if channel_id else "Not set — run `/setup channel`"
+    tier = guild.get("premium_tier", "free") if guild else "free"
+
+    embed = discord.Embed(title="Bot Configuration", color=discord.Color.blurple())
+    embed.add_field(name="Alert Channel", value=channel_mention, inline=True)
+    embed.add_field(name="Plan", value=tier.capitalize(), inline=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+bot.tree.add_command(setup_group)
+
+
+# ---------------------------------------------------------------------------
+# Background task: monitor alerts every 30 minutes
+# ---------------------------------------------------------------------------
+
+@tasks.loop(minutes=30)
+async def monitor_alerts():
+    logging.info("Running alert monitor...")
+    try:
+        alerts = await db.get_all_active_alerts()
+        if not alerts:
             return
 
-        url = f"https://api.heroku.com/apps/{HEROKU_APP_NAME}/dynos"
-        headers = {
-            "Authorization": f"Bearer {HEROKU_API_KEY}",
-            "Accept": "application/vnd.heroku+json; version=3"
-        }
+        symbols = list({a["symbol"] for a in alerts})
+        quotes = await market.get_quotes(symbols)
 
-        response = requests.delete(url, headers=headers)
-        if response.status_code == 202:
-            logging.info(f"Bot Restart command successful from {message.author}: {message.content}")
-            await message.channel.send("Bot is restarting...")
-        else:
-            logging.info(f"Bot Restart command FAILED from {message.author}: {message.content}")
-            await message.channel.send(f"Failed to restart: {response.status_code} - {response.text}")
+        for alert in alerts:
+            sym = alert["symbol"]
+            q = quotes.get(sym)
+            if not q:
+                continue
 
-    if message.content.startswith("!addstocks"):
-        logging.info(f"Command received from {message.author}: {message.content}")
-        parts = message.content.split()[1:]
-        if not parts:
-            await message.channel.send("Usage: !addstocks SYMBOL1 SYMBOL2 ...")
-            return
+            current = q.get("close") or 0
+            open_p = q.get("open") or current
+            if not open_p:
+                continue
 
-        added_stocks = []
-        invalid_stocks = []
+            pct_change = ((current - open_p) / open_p) * 100
+            direction = alert["direction"]
+            threshold = alert["threshold_pct"]
 
-        for stock_symbol in parts:
-            stock_symbol = stock_symbol.upper()
-            current_price = await fetch_stock_price(stock_symbol)
+            triggered = (
+                (direction == "both" and abs(pct_change) >= threshold)
+                or (direction == "up" and pct_change >= threshold)
+                or (direction == "down" and pct_change <= -threshold)
+            )
 
-            if current_price is None:
-                invalid_stocks.append(stock_symbol)
-            else:
-                save_stock(guild_id, user_id, stock_symbol, current_price)
-                added_stocks.append(stock_symbol)
+            if not triggered:
+                continue
 
-        if added_stocks:
-            logging.info(f"{message.author} added to watchlist {', '.join(added_stocks)}")
-            await message.channel.send(f"{message.author.mention} added ```{', '.join(added_stocks)}``` to their watchlist.")
-        if invalid_stocks:
-            logging.info(f"{message.author} FAILED to add INVALID stocks to watchlist: {', '.join(invalid_stocks)}")
-            await message.channel.send(f"Invalid symbols: {', '.join(invalid_stocks)}")
+            channel = bot.get_channel(alert["channel_id"])
+            if not channel:
+                continue
 
-    if message.content.startswith("!setchannel"):
-        logging.info(f"Command received from {message.author}: {message.content}")
-        set_update_channel(guild_id, message.channel.id)
-        logging.info(f"{message.author} set active bot channel to {guild_id, message.channel.id}")
-        await message.channel.send(f"Updates will be sent to this channel: {message.channel.mention}")
+            arrow = "📈" if pct_change > 0 else "📉"
+            await channel.send(
+                f"{arrow} **{sym}** moved **{pct_change:+.2f}%** today "
+                f"and is now **${current:,.2f}** — "
+                f"<@{alert['user_id']}>'s {threshold}% alert triggered"
+            )
+            await db.deactivate_alert(alert["id"])
+            logging.info(f"Alert fired: {sym} {pct_change:+.2f}% for user {alert['user_id']}")
 
-    if message.content.startswith("!set"):
-        logging.info(f"Command received from {message.author}: {message.content}")
-        parts = message.content.split()
-        if len(parts) < 2 or not parts[1].isdigit():
-            await message.channel.send("Usage: `!set PERCENTAGE` (e.g., `!set 10`).")
-            return
-
-        threshold = float(parts[1])
-
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO thresholds (user_id, guild_id, threshold)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (user_id, guild_id) DO UPDATE SET threshold = EXCLUDED.threshold
-            """, (user_id, guild_id, threshold))
-            conn.commit()
-
-        logging.info(f"Threshold set to {threshold}% for user {message.author} in guild {guild_id}.")
-        await message.channel.send(f"{message.author.mention} set his watchlist notification threshold to {threshold}%.")
+    except Exception:
+        logging.exception("Error in monitor_alerts task")
 
 
-    if message.content.startswith("!addstock"):
-        logging.info(f"Command received from {message.author}: {message.content}")
-        parts = message.content.split()
-        if len(parts) < 2:
-            logging.info(f"{message.author} FAILED to use addstock: {message.content}")
-            await message.channel.send("Usage: !addstock SYMBOL")
-            return
-
-        stock_symbol = parts[1].upper()
-        current_price = await fetch_stock_price(stock_symbol)
-        if current_price is None or current_price == 0:
-            logging.info(f"{message.author} tried to add an INVALID stock to watchlist: {message.content}")
-            await message.channel.send(f"Hey {message.author.mention}, womp womp:\n{stock_symbol} is not a valid stock.\nMake sure the stock is available on NASDAQ\nIf you need additional support go here: https://www.dummies.com/category/books/reading-33710/")
-            return
-
-        tracked_stocks = load_stocks(guild_id, user_id)
-        if stock_symbol not in tracked_stocks:
-            user_id = message.author.id
-            save_stock(guild_id, user_id, stock_symbol, current_price)
-            logging.info(f"{message.author} successfully added {stock_symbol} to watchlist")
-            await message.channel.send(f"{message.author.mention} added {stock_symbol} to their watchlist.")
-        else:
-            await message.channel.send(f"Hey {message.author.mention}, {stock_symbol} is already being tracked on your watchlist.")
-
-    if message.content.startswith("!price"):
-        logging.info(f"Command received from {message.author}: {message.content}")
-        parts = message.content.split()
-        if len(parts) < 2:
-            logging.info(f"{message.author} FAILED to use price check: {message.content}")
-            await message.channel.send("Usage: !price SYMBOL")
-            return
-
-        stock_symbol = parts[1].upper()
-
-        # Fetch stock price
-        stock_price = await fetch_stock_price(stock_symbol)
-
-        if stock_price is not None:
-            logging.info(f"{message.author} successfully checked the price of {stock_symbol}")
-            await message.channel.send(f"The current price of {stock_symbol} is ${stock_price:.2f}.")
-        else:
-            logging.info(f"{message.author} tried to check the price of an INVALID stock: {stock_symbol}")
-            await message.channel.send(f"Hey {message.author.mention}, womp womp:\n{stock_symbol} is not a valid stock.\nMake sure the stock is available on NASDAQ\nIf you need additional support go here: https://www.dummies.com/category/books/reading-33710/")
-
-    if message.content.startswith("!69"):
-        logging.info(f"{message.author} asked for a compliment")
-        compliment = await get_random_compliment()
-        await message.channel.send(f"{message.author.mention} {compliment}")
-
-    if message.content.startswith("!removestock"):
-        logging.info(f"Command received from {message.author}: {message.content}")
-        parts = message.content.split()
-        if len(parts) < 2:
-            logging.info(f"{message.author} FAILED to use remove stock: {message.content}")
-            await message.channel.send("Usage: !removestock SYMBOL")
-            return
-
-        stock_symbol = parts[1].upper()
-        tracked_stocks = load_stocks(guild_id, user_id)
-
-        if stock_symbol in tracked_stocks:
-            remove_stock(guild_id, user_id, stock_symbol)
-            logging.info(f"{message.author} successfully removed {stock_symbol} from watchlist")
-            await message.channel.send(f"{message.author.mention} removed {stock_symbol} from their watchlist.")
-        else:
-            logging.info(f"{message.author} tried to remove an INVALID stock: {message.content}")
-            await message.channel.send(f"{stock_symbol} is not on your watchlist.")
-
-    if message.content.startswith("!watchlist"):
-        logging.info(f"Command received from {message.author}: {message.content}")
-
-        try:
-            tracked_stocks = load_stocks(guild_id, user_id)  # Pass both guild_id and user_id
-            if not tracked_stocks:
-                logging.info(f"{message.author} tried to check an EMPTY watchlist")
-                await message.channel.send(f"Hey {message.author.mention}, your watchlist is empty.\nTry using ```!addstock SYMBOL``` or ```!addstocks SYMBOL SYMBOL ...```")
-            else:
-                watchlist_lines = []
-                for symbol, last_price in tracked_stocks.items():
-                    current_price = await fetch_stock_price(symbol)
-                    if current_price is not None:
-                        logging.info(f"WATCHLIST REQUEST: Checked price for {symbol}")
-                        watchlist_lines.append(f"{symbol}: ${current_price:.2f}")
-                    else:
-                        logging.info(f"WATCHLIST REQUEST FAILED: Couldn't fetch price for {symbol}")
-                        watchlist_lines.append(f"{symbol}: Unable to fetch current price.")
-                
-                user_rank = check_rank(user_id, guild_id)
-                rank_message = f"{message.author}'s current leaderboard ranking: {user_rank}" if user_rank else "You are not currently ranked."
-                watchlist = "\n".join(watchlist_lines)
-                logging.info(f"{message.author} checked their watchlist")
-                await message.channel.send(f"{message.author.mention}'s watchlist:\n```\n{watchlist}\n```\n{rank_message}")
-        except Exception as e:
-            logging.exception("Error fetching watchlist")
-            await message.channel.send("An error occurred while fetching your watchlist. Please try again later.")
-
-    if message.content.startswith("!imbored"):
-        logging.info(f"{message.author} is bored...")
-        async with aiohttp.ClientSession() as session:
-            async with session.get("https://uselessfacts.jsph.pl/random.json?language=en") as response:
-                if response.status == 200:
-                    data = await response.json()
-                    activity = data.get("text", "Couldn't fetch a fun fact.")
-                else:
-                    activity = "Too bad."
-        await message.channel.send(activity)
-    
-    if message.content.startswith("!requests"):
-        current_count, reset_date = get_request_count()
-        logging.info(f"{message.author} checked API request limit")
-        await message.channel.send(f"API requests used: {current_count}/{MONTHLY_LIMIT}\nResets on: {reset_date}")
-
-    if message.content.startswith("!leaderboard"):
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT username, score FROM leaderboard
-                WHERE date = %s AND guild_id = %s
-                ORDER BY score DESC LIMIT 10
-            """, (datetime.now().date(), message.guild.id))
-
-            leaderboard = cursor.fetchall()
-            if leaderboard:
-                result = "\n".join([f"{i+1}. {row['username']}: {row['score']:.2f}%" for i, row in enumerate(leaderboard)])
-                await message.channel.send(f"**Today's Leaderboard:**\n{result}")
-            else:
-                await message.channel.send("No leaderboard data available for today. Please wait 24hrs for results to populate.")
+@monitor_alerts.before_loop
+async def before_monitor():
+    await bot.wait_until_ready()
 
 
-async def get_random_compliment():
-    compliments = [
-    "You make things better just by being here!",
-    "Your energy is infectious!",
-    "You always bring the best vibes.",
-    "You have an amazing perspective.",
-    "Your ideas are always so thoughtful.",
-    "You’re a true problem-solver!",
-    "You handle challenges with grace.",
-    "You make a difference every single day.",
-    "Your support means so much.",
-    "You’re an inspiration to everyone around you.",
-    "You’ve got a heart of gold.",
-    "You light up the room with your presence.",
-    "Your kindness is contagious.",
-    "You’re braver than you think.",
-    "You always know the right thing to say.",
-    "You’ve got an amazing sense of humor!",
-    "Your creativity knows no bounds.",
-    "You’re always so helpful.",
-    "You make people feel heard and valued.",
-    "Your positivity is magnetic.",
-    "You’re a fantastic listener.",
-    "You’ve got a brilliant mind.",
-    "Your passion is inspiring.",
-    "You bring out the best in others.",
-    "You’re so dependable and trustworthy.",
-    "You’re a joy to be around.",
-    "Your work ethic is unmatched.",
-    "You’re always learning and growing.",
-    "You’ve got a knack for solving tough problems.",
-    "You have a great eye for detail.",
-    "You’re a beacon of hope and positivity.",
-    "You inspire others to do better.",
-    "Your dedication is remarkable.",
-    "You have a contagious enthusiasm.",
-    "Your laughter is the best sound.",
-    "You’re great at making people feel special.",
-    "You’re always willing to lend a hand.",
-    "You’ve got a wonderful perspective on life.",
-    "Your courage is admirable.",
-    "You’re an excellent role model.",
-    "Your smile brightens the day.",
-    "You’re incredibly thoughtful.",
-    "You make hard things look easy.",
-    "Your honesty is refreshing.",
-    "You bring so much joy to this space.",
-    "You’re incredibly talented.",
-    "You’ve got a way of making things fun.",
-    "Your determination is inspiring.",
-    "You’re so easy to talk to.",
-    "You always make people feel welcome.",
-    "You’re genuinely one of a kind.",
-    "You’re great at turning ideas into reality.",
-    "Your insights are always so valuable.",
-    "You make complicated things seem simple.",
-    "You’re so open-minded and understanding.",
-    "Your presence makes a difference.",
-    "You’re an awesome team player.",
-    "You’ve got an incredible sense of humor.",
-    "Your hard work doesn’t go unnoticed.",
-    "You have a calming presence.",
-    "You’re amazing just as you are.",
-    "You’re so full of good ideas.",
-    "You have a way of seeing the best in people.",
-    "You’re someone people can always count on.",
-    "You’re a natural leader.",
-    "You make the world brighter.",
-    "You’re so quick-witted!",
-    "You’ve got the best attitude.",
-    "Your confidence is inspiring.",
-    "You’re a force of nature in the best way.",
-    "Your perspective is always appreciated.",
-    "You make people feel comfortable and safe.",
-    "You’re incredibly wise.",
-    "Your enthusiasm is energizing.",
-    "You’ve got a great sense of humor.",
-    "You’re amazing at finding solutions.",
-    "You’re a real go-getter.",
-    "You make this community better.",
-    "You’re so compassionate.",
-    "You’ve got a real gift for understanding people.",
-    "You always find the silver lining.",
-    "You’re one of the most genuine people around.",
-    "You have a fantastic work ethic.",
-    "You’re so patient and kind.",
-    "Your contributions are invaluable.",
-    "You’re great at making people laugh.",
-    "Your optimism is infectious.",
-    "You always find a way to make it work.",
-    "You bring out the best in those around you.",
-    "You’re a true original.",
-    "You’re so thoughtful and considerate.",
-    "You always show up when it matters.",
-    "You make people feel included.",
-    "You’ve got an incredible amount of talent.",
-    "You’re an amazing problem-solver.",
-    "You’re so supportive and uplifting.",
-    "Your encouragement means the world to others.",
-    "You make even tough days better.",
-    "You're doing amazing!",
-    "Your effort truly shows!",
-    "Keep up the great work!",
-    "You're a valuable member of this community.",
-    "Your positivity is inspiring!",
-    "You're making a difference.",
-    "You have a fantastic attitude!",
-    "You're stronger than you think.",
-    "Your creativity is awesome!",
-    "You're a great listener.",
-    "You brighten up this space!",
-    "Your hard work pays off.",
-    "You're appreciated more than you know.",
-    "Your kindness is contagious!",
-    "You're a joy to be around.",
-    "You have a wonderful sense of humor.",
-    "You're crushing it!",
-    "You’re capable of amazing things.",
-    "Your dedication is inspiring.",
-    "You're making progress every day."
-]
-    return random.choice(compliments)
-    
-# Fetch stock price with retry logic
-async def fetch_stock_price(symbol, retries=3, delay=2):
-    for attempt in range(retries):
-        try:
-            update_request_count()
-            response = requests.get(STOCK_API_URL.format(symbol=symbol, apikey=FINNHUB_API_KEY), timeout=10)
-            response.raise_for_status()
-            data = response.json()
+# ---------------------------------------------------------------------------
+# Run
+# ---------------------------------------------------------------------------
 
-            # Log the API response for debugging
-            logging.info(f"API response for {symbol}: {data}")
-
-            # Validate the response based on the API's behavior
-            if data.get("c", 0) > 0:  # "c" is the current price
-                return data["c"]
-            else:
-                logging.warning(f"Invalid stock symbol: {symbol}. API returned: {data}")
-                return None  # Invalid stock symbol
-        except requests.exceptions.RequestException as e:
-            logging.warning(f"Request error for {symbol} (attempt {attempt + 1}/{retries}): {e}")
-            if attempt < retries - 1:
-                await asyncio.sleep(delay)
-        except Exception as e:
-            logging.exception(f"Unexpected error for {symbol}: {e}")
-            return None
-    return None
-
-
-    
-# Monitor stock changes
-async def monitor_stock_changes():
-    await client.wait_until_ready()
-    while not client.is_closed():
-        logging.debug("Starting stock monitoring iteration.")
-        try:
-            with get_db_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT DISTINCT guild_id FROM stocks")
-                guild_ids = [row["guild_id"] for row in cursor.fetchall()]
-
-                for guild_id in guild_ids:
-                    channel_id = get_update_channel(guild_id)
-                    if not channel_id:
-                        logging.debug(f"Skipping guild {guild_id}: No update channel set.")
-                        continue
-
-                    channel = client.get_channel(channel_id)
-                    if not channel:
-                        continue
-
-                    # Fetch distinct users for the guild
-                    cursor.execute("SELECT DISTINCT user_id FROM stocks WHERE guild_id = %s", (guild_id,))
-                    user_ids = [row["user_id"] for row in cursor.fetchall()]
-
-                    for user_id in user_ids:
-                        # Fetch user's threshold
-                        cursor.execute("""
-                            SELECT threshold FROM thresholds 
-                            WHERE user_id = %s AND guild_id = %s
-                        """, (user_id, guild_id))
-                        threshold_row = cursor.fetchone()
-                        threshold = threshold_row["threshold"] if threshold_row else 5  # Default 5%
-
-                        cursor.execute("""
-                            SELECT symbol, last_price FROM stocks 
-                            WHERE guild_id = %s AND user_id = %s
-                        """, (guild_id, user_id))
-                        stocks = cursor.fetchall()
-
-                        for row in stocks:
-                            symbol = row["symbol"]
-                            last_price = row["last_price"]
-                            current_price = await fetch_stock_price(symbol)
-
-                            if current_price and last_price:
-                                percent_change = ((current_price - last_price) / last_price) * 100
-                                if abs(percent_change) >= threshold:
-                                    logging.info(f"Stock alert triggered for {symbol}: {percent_change:.2f}% change.")
-                                    await channel.send(
-                                        f"⚠️ Stock Alert for <@{user_id}>! {symbol} changed by {percent_change:.2f}% "
-                                        f"and is now ${current_price:.2f}."
-                                    )
-
-                                # Update the last known price in the database
-                                cursor.execute(
-                                    "UPDATE stocks SET last_price = %s WHERE guild_id = %s AND user_id = %s AND symbol = %s",
-                                    (current_price, guild_id, user_id, symbol)
-                                )
-                        conn.commit()
-        except Exception as e:
-            logging.exception("Error in monitor_stock_changes loop")
-        await asyncio.sleep(1800)
-        logging.debug("Sleeping for 1800 seconds before next iteration.")
-        
-async def main(token):
-    async with client:
-        await client.start(token)
-
-# Main Script
-token = os.getenv('TOKEN')
+token = os.environ.get("DISCORD_TOKEN")
 if not token:
-    logging.error("TOKEN environment variable not found. Bot cannot start.")
-    exit(1)
+    logging.error("DISCORD_TOKEN not set.")
+    sys.exit(1)
 
-if __name__ == "__main__":
-    initialize_db()
-    # Register signal handlers
-    signal.signal(signal.SIGINT, shutdown_handler)
-    signal.signal(signal.SIGTERM, shutdown_handler)
-    asyncio.run(main(token))
+bot.run(token, log_handler=None)
