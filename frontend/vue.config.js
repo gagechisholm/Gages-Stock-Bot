@@ -1,7 +1,13 @@
 module.exports = {
+  pages: {
+    index: {
+      entry: "src/main.js",
+      title: "StockNPC – Stock Market Bot for Discord",
+    },
+  },
   devServer: {
     proxy: "http://localhost:5000",
   },
-  outputDir: "frontend/dist", // Ensures the build output goes to 'frontend/dist'
-  publicPath: "/", // Adjust if deploying to a subpath
+  outputDir: "frontend/dist",
+  publicPath: "/",
 };

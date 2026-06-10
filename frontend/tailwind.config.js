@@ -6,8 +6,11 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        primary: "#1b2838", // Dark Steam-like background
-        accent: "#66c0f4", // Vibrant blue
+        brand: "#5865F2",
+        "brand-hover": "#4752C4",
+      },
+      fontFamily: {
+        sans: ["-apple-system", "BlinkMacSystemFont", '"Inter"', '"Segoe UI"', "sans-serif"],
       },
     },
   },
