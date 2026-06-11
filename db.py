@@ -193,6 +193,16 @@ async def remove_from_server_watchlist(guild_id: int, symbol: str) -> bool:
 # Alerts
 # ---------------------------------------------------------------------------
 
+async def count_active_alerts(guild_id: int, user_id: int) -> int:
+    result = await _run(lambda: get_client().table("alerts")
+        .select("id", count="exact")
+        .eq("guild_id", guild_id)
+        .eq("user_id", user_id)
+        .eq("active", True)
+        .execute())
+    return result.count or 0
+
+
 async def get_active_alerts(guild_id: int, user_id: int) -> list[dict]:
     result = await _run(lambda: get_client().table("alerts")
         .select("*")

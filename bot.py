@@ -36,8 +36,16 @@ intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 ET = ZoneInfo("America/New_York")
-PREMIUM_PRO_SKU_ID = os.environ.get("PREMIUM_PRO_SKU_ID")
+PREMIUM_PRO_SKU_ID  = os.environ.get("PREMIUM_PRO_SKU_ID")
 PREMIUM_PLUS_SKU_ID = os.environ.get("PREMIUM_PLUS_SKU_ID")
+API_URL             = os.environ.get("API_URL", "")
+
+FREE_WATCHLIST_LIMIT = 5
+FREE_ALERT_LIMIT     = 3
+
+
+def upgrade_link(guild_id: int) -> str:
+    return f"{API_URL}/stripe/checkout?guild_id={guild_id}"
 
 _openai_client: AsyncOpenAI | None = None
 _leaderboard_posted: set[str] = set()  # "guild_id:date" keys to prevent double-posting
@@ -228,9 +236,11 @@ async def watchlist_add(interaction: discord.Interaction, symbol: str):
     symbol = symbol.upper()
 
     current_list = await db.get_member_watchlist(interaction.guild_id, interaction.user.id)
-    if len(current_list) >= 10 and not await has_premium(interaction.guild_id):
+    is_premium = await has_premium(interaction.guild_id)
+    if len(current_list) >= FREE_WATCHLIST_LIMIT and not is_premium:
         await interaction.followup.send(
-            "Free watchlists are limited to 10 stocks. Upgrade to Pro to add more.",
+            f"Free servers are limited to {FREE_WATCHLIST_LIMIT} stocks per watchlist.\n"
+            f"Upgrade to Pro for unlimited picks: {upgrade_link(interaction.guild_id)}",
             ephemeral=True,
         )
         return
@@ -337,6 +347,17 @@ async def alert_set(
     await interaction.response.defer(ephemeral=True)
     symbol = symbol.upper()
 
+    is_premium = await has_premium(interaction.guild_id)
+    if not is_premium:
+        alert_count = await db.count_active_alerts(interaction.guild_id, interaction.user.id)
+        if alert_count >= FREE_ALERT_LIMIT:
+            await interaction.followup.send(
+                f"Free servers are limited to {FREE_ALERT_LIMIT} active alerts per person.\n"
+                f"Upgrade to Pro for unlimited alerts: {upgrade_link(interaction.guild_id)}",
+                ephemeral=True,
+            )
+            return
+
     settings = await db.get_settings(interaction.guild_id)
     channel_id = settings.get("alert_channel_id")
     if not channel_id:
@@ -437,7 +458,11 @@ async def leaderboard(interaction: discord.Interaction):
         color=discord.Color.gold(),
         timestamp=datetime.now(timezone.utc),
     )
-    embed.set_footer(text="Ranked by avg % gain across watchlist picks since added")
+    is_premium = await has_premium(interaction.guild.id)
+    footer = "Ranked by avg % gain across watchlist picks since added"
+    if not is_premium:
+        footer += f" · Want the daily AI roast leaderboard? Upgrade for $5/mo: {upgrade_link(interaction.guild.id)}"
+    embed.set_footer(text=footer)
     await interaction.followup.send(embed=embed)
 
 
@@ -575,6 +600,9 @@ async def scheduled_leaderboard():
             continue
 
         try:
+            if not await db.is_premium(guild_id):
+                continue
+
             settings = await db.get_settings(guild_id)
             channel_id = settings.get("alert_channel_id")
             if not channel_id:
