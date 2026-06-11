@@ -171,7 +171,7 @@ async def generate_brainrot_announcement(period: str, rankings: list[dict]) -> s
                 {
                     "role": "system",
                     "content": (
-                        "You are BrainrotGPT, a Gen-Z stock market commentator in a Discord server. "
+                        "You are Stock NPC, a Gen-Z stock market commentator in a Discord server. "
                         "React to the leaderboard like a funny friend in a group chat would. "
                         "Ruthless toward people at the bottom, respectful toward people at the top. "
                         "The roast level has to match their rank — calling a top performer trash makes no sense. "
@@ -531,7 +531,7 @@ async def leaderboard(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
     if not is_premium:
         await interaction.followup.send(
-            f"Want BrainrotGPT to roast these picks every market close? "
+            f"Want Stock NPC to roast these picks every market close? "
             f"**[Upgrade to Pro for $5/mo]({upgrade_link(interaction.guild.id)})**  ·  or run `/upgrade` to learn more"
         )
 
@@ -580,7 +580,7 @@ bot.tree.add_command(setup_group)
 
 
 # ---------------------------------------------------------------------------
-# /roastme — BrainrotGPT roasts your watchlist picks
+# /roastme — Stock NPC roasts your watchlist picks
 # ---------------------------------------------------------------------------
 
 @bot.tree.command(name="roastme", description="Roast your stock picks — or someone else's")
@@ -679,7 +679,7 @@ async def roastme(interaction: discord.Interaction, user: discord.Member = None)
                 {
                     "role": "system",
                     "content": (
-                        "You are BrainrotGPT, a Gen-Z financial commentator in a Discord server. "
+                        "You are Stock NPC, a Gen-Z financial commentator in a Discord server. "
                         "Write a roast that feels like something a funny friend would text in a group chat. "
                         "It has to be witty and land naturally — if a joke is forced or try-hard, cut it. "
                         "Ruthless when the person is doing badly, respectful when they're winning. "
@@ -740,7 +740,7 @@ async def upgrade(interaction: discord.Interaction):
             "📋 **Unlimited watchlist picks** (free = 5 per person)\n"
             "🔔 **Unlimited price alerts** (free = 3 per person)\n"
             "🔥 **Unlimited `/roastme` uses** (free = 2 per person per week)\n"
-            "🤖 **Daily BrainrotGPT leaderboard drops** — AI roasts your server's stock picks every market close\n"
+            "🤖 **Daily Stock NPC leaderboard drops** — AI roasts your server's stock picks every market close\n"
             "📅 Weekly and monthly leaderboards posted automatically\n"
         ),
         color=discord.Color.gold(),
