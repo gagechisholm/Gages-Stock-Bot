@@ -174,7 +174,10 @@ async def on_ready():
 @bot.event
 async def on_guild_join(guild: discord.Guild):
     logging.info(f"Joined guild: {guild.name} ({guild.id})")
-    await db.register_guild(guild.id, guild.name, guild.owner_id)
+    try:
+        await db.register_guild(guild.id, guild.name, guild.owner_id)
+    except Exception:
+        logging.exception(f"Failed to register guild {guild.id} in DB")
 
     embed = discord.Embed(
         title="StockNPC is here!",
@@ -199,7 +202,10 @@ async def on_guild_join(guild: discord.Guild):
             None,
         )
     if channel:
-        await channel.send(embed=embed)
+        try:
+            await channel.send(embed=embed)
+        except Exception:
+            logging.exception(f"Failed to send welcome message to guild {guild.id}")
 
 
 # ---------------------------------------------------------------------------
