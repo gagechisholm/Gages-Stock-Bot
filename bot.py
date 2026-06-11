@@ -95,7 +95,12 @@ async def compute_leaderboard(guild: discord.Guild) -> list[dict]:
     ):
         avg = sum(gains) / len(gains)
         member = guild.get_member(uid)
-        name = member.display_name if member else f"User {uid}"
+        if not member:
+            try:
+                member = await guild.fetch_member(uid)
+            except Exception:
+                member = None
+        name = member.display_name if member else f"Unknown ({uid})"
         ranked.append({"user_id": uid, "name": name, "avg_gain": avg, "pick_count": len(gains)})
 
     for i, row in enumerate(ranked):
