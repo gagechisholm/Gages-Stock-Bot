@@ -42,6 +42,7 @@ API_URL             = os.environ.get("API_URL", "")
 
 FREE_WATCHLIST_LIMIT = 5
 FREE_ALERT_LIMIT     = 3
+FREE_ROAST_LIMIT     = 2
 
 
 def upgrade_link(guild_id: int) -> str:
@@ -49,6 +50,24 @@ def upgrade_link(guild_id: int) -> str:
 
 _openai_client: AsyncOpenAI | None = None
 _leaderboard_posted: set[str] = set()  # "guild_id:date" keys to prevent double-posting
+
+# In-memory roast usage: "guild_id:user_id" -> (iso_week_str, count)
+_roast_usage: dict[str, tuple[str, int]] = {}
+
+
+def _current_week() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-W%W")
+
+
+def _roasts_used(guild_id: int, user_id: int) -> int:
+    key = f"{guild_id}:{user_id}"
+    week, count = _roast_usage.get(key, ("", 0))
+    return count if week == _current_week() else 0
+
+
+def _increment_roast(guild_id: int, user_id: int) -> None:
+    key = f"{guild_id}:{user_id}"
+    _roast_usage[key] = (_current_week(), _roasts_used(guild_id, user_id) + 1)
 
 
 def get_openai() -> AsyncOpenAI:
@@ -564,18 +583,35 @@ bot.tree.add_command(setup_group)
 # /roastme — BrainrotGPT roasts your watchlist picks
 # ---------------------------------------------------------------------------
 
-@bot.tree.command(name="roastme", description="Let BrainrotGPT roast your stock picks")
-async def roastme(interaction: discord.Interaction):
+@bot.tree.command(name="roastme", description="Roast your stock picks — or someone else's")
+@app_commands.describe(user="Who to roast (leave empty to roast yourself)")
+async def roastme(interaction: discord.Interaction, user: discord.Member = None):
     await interaction.response.defer()
+
+    requester = interaction.user
+    target = user or requester
+
+    # Rate limit check for the person triggering the command
+    is_premium = await has_premium(interaction.guild_id)
+    if not is_premium:
+        used = _roasts_used(interaction.guild_id, requester.id)
+        if used >= FREE_ROAST_LIMIT:
+            await interaction.followup.send(
+                f"You've used both your roasts for this week. "
+                f"Upgrade to Pro for unlimited roasts: {upgrade_link(interaction.guild_id)}",
+                ephemeral=True,
+            )
+            return
 
     # Get full server leaderboard for context
     rankings = await compute_leaderboard(interaction.guild)
-    user_rank = next((r for r in rankings if r["user_id"] == interaction.user.id), None)
+    user_rank = next((r for r in rankings if r["user_id"] == target.id), None)
 
-    entries = await db.get_member_watchlist_detailed(interaction.guild_id, interaction.user.id)
+    entries = await db.get_member_watchlist_detailed(interaction.guild_id, target.id)
     if not entries:
+        noun = "You don't" if target == requester else f"{target.display_name} doesn't"
         await interaction.followup.send(
-            f"{interaction.user.mention} doesn't even have any picks. "
+            f"{noun} have any picks on their watchlist. "
             "Add something with `/watchlist add` first."
         )
         return
@@ -620,8 +656,15 @@ async def roastme(interaction: discord.Interaction):
     else:
         tone = "They're near the bottom of the server. Go ruthless. Destroy them. No mercy."
 
+    third_party = target != requester
+    if third_party:
+        setup = f"{requester.display_name} is calling out {target.display_name}'s picks."
+    else:
+        setup = f"{target.display_name} asked to be roasted."
+
     prompt = (
-        f"Roast {interaction.user.display_name}'s stock picks in the context of their server's leaderboard.\n\n"
+        f"{setup}\n\n"
+        f"Person being roasted: {target.display_name}\n"
         f"Their rank: {rank_context}\n"
         f"Their picks:\n" + "\n".join(pick_lines) + "\n\n"
         f"Full server standings:\n{server_context}\n\n"
@@ -655,11 +698,22 @@ async def roastme(interaction: discord.Interaction):
     except Exception:
         logging.exception("OpenAI roastme failed")
         if percentile > 0.6:
-            roast = f"bro is bottom of the leaderboard and still asked to get roasted. respect the confidence at least 💀"
+            roast = "bro is bottom of the leaderboard and still asked to get roasted. respect the confidence at least 💀"
         else:
-            roast = f"solid picks honestly. still not beating the market tho lol"
+            roast = "solid picks honestly. still not beating the market tho lol"
 
-    await interaction.followup.send(f"{interaction.user.mention}\n{roast}")
+    # Increment usage and build upsell if needed
+    upsell = ""
+    if not is_premium:
+        _increment_roast(interaction.guild_id, requester.id)
+        remaining = FREE_ROAST_LIMIT - _roasts_used(interaction.guild_id, requester.id)
+        if remaining <= 0:
+            upsell = f"\n\n*{requester.display_name}, that was your last free roast this week. Upgrade for unlimited: {upgrade_link(interaction.guild_id)}*"
+        else:
+            upsell = f"\n\n*{requester.display_name}: {remaining} roast{'s' if remaining != 1 else ''} left this week.*"
+
+    ping = target.mention if target != requester else requester.mention
+    await interaction.followup.send(f"{ping}\n{roast}{upsell}")
 
 
 # ---------------------------------------------------------------------------
@@ -685,6 +739,7 @@ async def upgrade(interaction: discord.Interaction):
             "**What you get on Pro:**\n"
             "📋 **Unlimited watchlist picks** (free = 5 per person)\n"
             "🔔 **Unlimited price alerts** (free = 3 per person)\n"
+            "🔥 **Unlimited `/roastme` uses** (free = 2 per person per week)\n"
             "🤖 **Daily BrainrotGPT leaderboard drops** — AI roasts your server's stock picks every market close\n"
             "📅 Weekly and monthly leaderboards posted automatically\n"
         ),
