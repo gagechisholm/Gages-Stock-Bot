@@ -159,6 +159,19 @@ async def generate_brainrot_announcement(period: str, rankings: list[dict]) -> s
 # Bot events
 # ---------------------------------------------------------------------------
 
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    logging.exception(f"Slash command error in /{interaction.command.name if interaction.command else '?'}", exc_info=error)
+    msg = "Something went wrong. Please try again."
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+    except Exception:
+        pass
+
+
 @bot.event
 async def on_ready():
     logging.info(f"Logged in as {bot.user} ({bot.user.id})")
@@ -487,9 +500,13 @@ setup_group = app_commands.Group(
 @app_commands.describe(channel="The channel to use for bot alerts")
 async def setup_channel(interaction: discord.Interaction, channel: discord.TextChannel):
     await interaction.response.defer(ephemeral=True)
-    await db.register_guild(interaction.guild_id, interaction.guild.name, interaction.guild.owner_id)
-    await db.set_alert_channel(interaction.guild_id, channel.id)
-    await interaction.followup.send(f"Alert channel set to {channel.mention}.", ephemeral=True)
+    try:
+        await db.register_guild(interaction.guild_id, interaction.guild.name, interaction.guild.owner_id)
+        await db.set_alert_channel(interaction.guild_id, channel.id)
+        await interaction.followup.send(f"Alert channel set to {channel.mention}.", ephemeral=True)
+    except Exception:
+        logging.exception("setup_channel failed")
+        await interaction.followup.send("Something went wrong saving that channel. Try again.", ephemeral=True)
 
 
 @setup_group.command(name="info", description="View current bot configuration for this server")
