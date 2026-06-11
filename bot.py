@@ -608,28 +608,22 @@ async def roastme(interaction: discord.Interaction, user: discord.Member = None)
     user_rank = next((r for r in rankings if r["user_id"] == target.id), None)
 
     entries = await db.get_member_watchlist_detailed(interaction.guild_id, target.id)
-    if not entries:
-        noun = "You don't" if target == requester else f"{target.display_name} doesn't"
-        await interaction.followup.send(
-            f"{noun} have any picks on their watchlist. "
-            "Add something with `/watchlist add` first."
-        )
-        return
-
-    symbols = [e["symbol"] for e in entries]
-    quotes = await market.get_quotes(symbols)
+    no_picks = not entries
 
     pick_lines = []
-    for entry in entries:
-        sym = entry["symbol"]
-        added = entry.get("added_price")
-        q = quotes.get(sym)
-        current = (q.get("close") or 0) if q else 0
-        if added and added > 0:
-            pct = (current - added) / added * 100
-            pick_lines.append(f"  {sym}: {pct:+.2f}%")
-        else:
-            pick_lines.append(f"  {sym}: no price data")
+    if not no_picks:
+        symbols = [e["symbol"] for e in entries]
+        quotes = await market.get_quotes(symbols)
+        for entry in entries:
+            sym = entry["symbol"]
+            added = entry.get("added_price")
+            q = quotes.get(sym)
+            current = (q.get("close") or 0) if q else 0
+            if added and added > 0:
+                pct = (current - added) / added * 100
+                pick_lines.append(f"  {sym}: {pct:+.2f}%")
+            else:
+                pick_lines.append(f"  {sym}: no price data")
 
     total = len(rankings)
     if user_rank:
@@ -649,28 +643,44 @@ async def roastme(interaction: discord.Interaction, user: discord.Member = None)
     ]
     server_context = "\n".join(server_lines) if server_lines else "  (no one else has picks)"
 
-    if percentile <= 0.25:
-        tone = "They're near the top of the server so keep it light — give them props but still find something to clown on."
-    elif percentile <= 0.60:
-        tone = "They're mid-pack. Balanced roast, point out what's working and what isn't."
-    else:
-        tone = "They're near the bottom of the server. Go ruthless. Destroy them. No mercy."
-
     third_party = target != requester
-    if third_party:
-        setup = f"{requester.display_name} is calling out {target.display_name}'s picks."
-    else:
-        setup = f"{target.display_name} asked to be roasted."
 
-    prompt = (
-        f"{setup}\n\n"
-        f"Person being roasted: {target.display_name}\n"
-        f"Their rank: {rank_context}\n"
-        f"Their picks:\n" + "\n".join(pick_lines) + "\n\n"
-        f"Full server standings:\n{server_context}\n\n"
-        f"Tone: {tone}\n"
-        f"Reference other people's performance to make it feel like a group chat moment, not a solo callout."
-    )
+    if no_picks:
+        tone = "They have zero stocks. Not bottom of the leaderboard — not even on it. Roast them for not participating at all while everyone else has skin in the game."
+        if third_party:
+            setup = f"{requester.display_name} is calling out {target.display_name}, who hasn't added a single stock pick."
+        else:
+            setup = f"{target.display_name} asked to be roasted but hasn't added any stock picks."
+        prompt = (
+            f"{setup}\n\n"
+            f"Person being roasted: {target.display_name}\n"
+            f"Their picks: none — completely empty watchlist\n\n"
+            f"Full server standings:\n{server_context}\n\n"
+            f"Tone: {tone}\n"
+            f"Reference what other people in the server are doing to make them feel left out."
+        )
+    else:
+        if percentile <= 0.25:
+            tone = "They're near the top of the server so keep it light — give them props but still find something to clown on."
+        elif percentile <= 0.60:
+            tone = "They're mid-pack. Balanced roast, point out what's working and what isn't."
+        else:
+            tone = "They're near the bottom of the server. Go ruthless. Destroy them. No mercy."
+
+        if third_party:
+            setup = f"{requester.display_name} is calling out {target.display_name}'s picks."
+        else:
+            setup = f"{target.display_name} asked to be roasted."
+
+        prompt = (
+            f"{setup}\n\n"
+            f"Person being roasted: {target.display_name}\n"
+            f"Their rank: {rank_context}\n"
+            f"Their picks:\n" + "\n".join(pick_lines) + "\n\n"
+            f"Full server standings:\n{server_context}\n\n"
+            f"Tone: {tone}\n"
+            f"Reference other people's performance to make it feel like a group chat moment, not a solo callout."
+        )
 
     try:
         response = await get_openai().chat.completions.create(
@@ -697,7 +707,9 @@ async def roastme(interaction: discord.Interaction, user: discord.Member = None)
         roast = response.choices[0].message.content
     except Exception:
         logging.exception("OpenAI roastme failed")
-        if percentile > 0.6:
+        if no_picks:
+            roast = "doesn't even have a single stock pick. watching from the sidelines while everyone else has skin in the game."
+        elif percentile > 0.6:
             roast = "bro is bottom of the leaderboard and still asked to get roasted. respect the confidence at least 💀"
         else:
             roast = "solid picks honestly. still not beating the market tho lol"
@@ -740,7 +752,7 @@ async def upgrade(interaction: discord.Interaction):
             "📋 **Unlimited watchlist picks** (free = 5 per person)\n"
             "🔔 **Unlimited price alerts** (free = 3 per person)\n"
             "🔥 **Unlimited `/roastme` uses** (free = 2 per person per week)\n"
-            "🤖 **Daily Stock NPC leaderboard drops** — AI roasts your server's stock picks every market close\n"
+            "🤖 **Daily Stock NPC leaderboard drops** — Stock NPC roasts your server's stock picks every market close\n"
             "📅 Weekly and monthly leaderboards posted automatically\n"
         ),
         color=discord.Color.gold(),
