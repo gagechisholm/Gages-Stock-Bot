@@ -125,13 +125,25 @@ def _get_leaderboard_period(now: datetime) -> str | None:
 
 
 async def generate_brainrot_announcement(period: str, rankings: list[dict]) -> str:
-    stats = "\n".join(
-        f"{r['rank']}. {r['name']} {r['avg_gain']:+.2f}% ({r['pick_count']} picks)"
-        for r in rankings[:10]
-    )
+    total = len(rankings)
+    lines = []
+    for r in rankings[:10]:
+        percentile = r["rank"] / total if total > 0 else 0.5
+        if percentile <= 0.25:
+            tone_hint = "(top of server, give props)"
+        elif percentile <= 0.60:
+            tone_hint = "(mid, balanced)"
+        else:
+            tone_hint = "(bottom, go ruthless)"
+        lines.append(
+            f"#{r['rank']} {r['name']}: {r['avg_gain']:+.2f}% over {r['pick_count']} picks {tone_hint}"
+        )
+    stats = "\n".join(lines)
     prompt = (
-        f"Announce the leaderboard rankings for stock portfolios {period}, "
-        f"roast and praise them individually, line by line. Stats:\n{stats}"
+        f"Post the {period} leaderboard for this server's stock picks. "
+        f"Go through each person with a short reaction — praise winners, roast losers. "
+        f"Make it feel like a group chat, not a monologue. Reference how people compare to each other.\n\n"
+        f"Standings:\n{stats}"
     )
     try:
         response = await get_openai().chat.completions.create(
@@ -140,11 +152,14 @@ async def generate_brainrot_announcement(period: str, rankings: list[dict]) -> s
                 {
                     "role": "system",
                     "content": (
-                        "You are BrainrotGPT, a Gen-Z stock market commentator. "
-                        "Roast losers and hype winners. Be witty, simple, and relatable — never cringe or try-hard. "
-                        "Sound like a funny friend texting, not a comedian performing. "
-                        "Use casual Gen-Z language and emojis naturally. "
-                        "Never use em dashes, asterisks, or any markdown formatting."
+                        "You are BrainrotGPT, a Gen-Z stock market commentator in a Discord server. "
+                        "React to the leaderboard like a funny friend in a group chat would. "
+                        "Ruthless toward people at the bottom, respectful toward people at the top. "
+                        "The roast level has to match their rank — calling a top performer trash makes no sense. "
+                        "Be witty and natural. If a joke isn't casually funny, don't say it. "
+                        "Reference comparisons between people to make it feel like a server moment, not solo callouts. "
+                        "Casual Gen-Z tone, emojis only when they add something. "
+                        "Never use em dashes, asterisks, or markdown formatting."
                     ),
                 },
                 {"role": "user", "content": prompt},
@@ -550,18 +565,23 @@ bot.tree.add_command(setup_group)
 @bot.tree.command(name="roastme", description="Let BrainrotGPT roast your stock picks")
 async def roastme(interaction: discord.Interaction):
     await interaction.response.defer()
+
+    # Get full server leaderboard for context
+    rankings = await compute_leaderboard(interaction.guild)
+    user_rank = next((r for r in rankings if r["user_id"] == interaction.user.id), None)
+
     entries = await db.get_member_watchlist_detailed(interaction.guild_id, interaction.user.id)
     if not entries:
         await interaction.followup.send(
-            f"{interaction.user.mention} doesn't even have stocks on their watchlist. "
-            "Can't roast what doesn't exist. Add something with `/watchlist add`."
+            f"{interaction.user.mention} doesn't even have any picks. "
+            "Add something with `/watchlist add` first."
         )
         return
 
     symbols = [e["symbol"] for e in entries]
     quotes = await market.get_quotes(symbols)
 
-    lines = []
+    pick_lines = []
     for entry in entries:
         sym = entry["symbol"]
         added = entry.get("added_price")
@@ -569,14 +589,42 @@ async def roastme(interaction: discord.Interaction):
         current = (q.get("close") or 0) if q else 0
         if added and added > 0:
             pct = (current - added) / added * 100
-            lines.append(f"{sym}: {pct:+.2f}% since added")
+            pick_lines.append(f"  {sym}: {pct:+.2f}%")
         else:
-            lines.append(f"{sym}: price unavailable")
+            pick_lines.append(f"  {sym}: no price data")
 
-    stats = "\n".join(lines)
+    total = len(rankings)
+    if user_rank:
+        rank_num = user_rank["rank"]
+        avg = user_rank["avg_gain"]
+        rank_context = f"Rank #{rank_num} out of {total} in this server ({avg:+.2f}% avg)"
+        # Percentile: 1 = best, total = worst
+        percentile = rank_num / total if total > 0 else 0.5
+    else:
+        rank_context = "Not ranked (no tracked data yet)"
+        percentile = 0.5
+
+    # Build server standings for comparison
+    server_lines = [
+        f"  #{r['rank']} {r['name']}: {r['avg_gain']:+.2f}%"
+        for r in rankings[:8]
+    ]
+    server_context = "\n".join(server_lines) if server_lines else "  (no one else has picks)"
+
+    if percentile <= 0.25:
+        tone = "They're near the top of the server so keep it light — give them props but still find something to clown on."
+    elif percentile <= 0.60:
+        tone = "They're mid-pack. Balanced roast, point out what's working and what isn't."
+    else:
+        tone = "They're near the bottom of the server. Go ruthless. Destroy them. No mercy."
+
     prompt = (
-        f"Roast {interaction.user.display_name}'s stock picks. "
-        f"Be brutal, funny, and personal. Their picks:\n{stats}"
+        f"Roast {interaction.user.display_name}'s stock picks in the context of their server's leaderboard.\n\n"
+        f"Their rank: {rank_context}\n"
+        f"Their picks:\n" + "\n".join(pick_lines) + "\n\n"
+        f"Full server standings:\n{server_context}\n\n"
+        f"Tone: {tone}\n"
+        f"Reference other people's performance to make it feel like a group chat moment, not a solo callout."
     )
 
     try:
@@ -586,21 +634,26 @@ async def roastme(interaction: discord.Interaction):
                 {
                     "role": "system",
                     "content": (
-                        "You are BrainrotGPT, a Gen-Z financial commentator. "
-                        "Roast this person's stock picks. Be witty, simple, and relatable — never cringe or try-hard. "
-                        "Sound like a funny friend texting, not a comedian performing. "
-                        "Use casual Gen-Z language and emojis naturally. "
-                        "Never use em dashes, asterisks, or any markdown formatting."
+                        "You are BrainrotGPT, a Gen-Z financial commentator in a Discord server. "
+                        "Write a roast that feels like something a funny friend would text in a group chat. "
+                        "It has to be witty and land naturally — if a joke is forced or try-hard, cut it. "
+                        "Ruthless when the person is doing badly, respectful when they're winning. "
+                        "Reference the server leaderboard to make comparisons. Keep it short. "
+                        "Casual Gen-Z tone, emojis used sparingly and only when they actually add something. "
+                        "Never use em dashes, asterisks, or markdown formatting."
                     ),
                 },
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=300,
+            max_tokens=350,
         )
         roast = response.choices[0].message.content
     except Exception:
         logging.exception("OpenAI roastme failed")
-        roast = f"{interaction.user.display_name} has {len(entries)} picks and somehow all of them are terrible. Impressive."
+        if percentile > 0.6:
+            roast = f"bro is bottom of the leaderboard and still asked to get roasted. respect the confidence at least 💀"
+        else:
+            roast = f"solid picks honestly. still not beating the market tho lol"
 
     await interaction.followup.send(f"{interaction.user.mention}\n{roast}")
 
