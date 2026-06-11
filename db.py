@@ -152,7 +152,8 @@ async def get_member_watchlist(guild_id: int, user_id: int) -> list[str]:
 
 async def add_to_member_watchlist(
     guild_id: int, user_id: int, symbol: str, added_price: float | None = None
-) -> bool:
+) -> bool | str:
+    """Returns True on success, 'duplicate' if already exists, False on other errors."""
     try:
         row: dict = {
             "guild_id": guild_id,
@@ -165,9 +166,9 @@ async def add_to_member_watchlist(
         return True
     except httpx.HTTPStatusError as e:
         body = e.response.text.lower()
-        if "duplicate" in body or "unique" in body or "23505" in body:
-            return False
-        logging.exception(f"Error adding {symbol} to watchlist")
+        if "23505" in body or "duplicate" in body or "unique" in body:
+            return "duplicate"
+        logging.error(f"Error adding {symbol} to watchlist: {e.response.status_code} {e.response.text}")
         return False
     except Exception:
         logging.exception(f"Error adding {symbol} to watchlist")

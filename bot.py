@@ -255,6 +255,8 @@ async def watchlist_add(interaction: discord.Interaction, symbol: str):
     await interaction.response.defer(ephemeral=True)
     symbol = symbol.upper()
 
+    await db.register_guild(interaction.guild_id, interaction.guild.name, interaction.guild.owner_id)
+
     current_list = await db.get_member_watchlist(interaction.guild_id, interaction.user.id)
     is_premium = await has_premium(interaction.guild_id)
     if len(current_list) >= FREE_WATCHLIST_LIMIT and not is_premium:
@@ -274,11 +276,14 @@ async def watchlist_add(interaction: discord.Interaction, symbol: str):
         return
 
     added_price = q.get("close") or None
-    added = await db.add_to_member_watchlist(
+    result = await db.add_to_member_watchlist(
         interaction.guild_id, interaction.user.id, symbol, added_price
     )
-    if not added:
+    if result == "duplicate":
         await interaction.followup.send(f"**{symbol}** is already in your watchlist.", ephemeral=True)
+        return
+    if not result:
+        await interaction.followup.send("Failed to add to watchlist. Try again.", ephemeral=True)
         return
 
     await interaction.followup.send(
@@ -529,6 +534,66 @@ async def setup_info(interaction: discord.Interaction):
 
 
 bot.tree.add_command(setup_group)
+
+
+# ---------------------------------------------------------------------------
+# /roastme — BrainrotGPT roasts your watchlist picks
+# ---------------------------------------------------------------------------
+
+@bot.tree.command(name="roastme", description="Let BrainrotGPT roast your stock picks")
+async def roastme(interaction: discord.Interaction):
+    await interaction.response.defer()
+    entries = await db.get_member_watchlist_detailed(interaction.guild_id, interaction.user.id)
+    if not entries:
+        await interaction.followup.send(
+            f"{interaction.user.mention} doesn't even have stocks on their watchlist. "
+            "Can't roast what doesn't exist. Add something with `/watchlist add`."
+        )
+        return
+
+    symbols = [e["symbol"] for e in entries]
+    quotes = await market.get_quotes(symbols)
+
+    lines = []
+    for entry in entries:
+        sym = entry["symbol"]
+        added = entry.get("added_price")
+        q = quotes.get(sym)
+        current = (q.get("close") or 0) if q else 0
+        if added and added > 0:
+            pct = (current - added) / added * 100
+            lines.append(f"{sym}: {pct:+.2f}% since added")
+        else:
+            lines.append(f"{sym}: price unavailable")
+
+    stats = "\n".join(lines)
+    prompt = (
+        f"Roast {interaction.user.display_name}'s stock picks. "
+        f"Be brutal, funny, and personal. Their picks:\n{stats}"
+    )
+
+    try:
+        response = await get_openai().chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are BrainrotGPT, a chaotic Gen-Z financial commentator. "
+                        "Roast this person's stock picks mercilessly. Short, punchy, funny. "
+                        "Use internet slang and financial memes. No asterisks for formatting."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=300,
+        )
+        roast = response.choices[0].message.content
+    except Exception:
+        logging.exception("OpenAI roastme failed")
+        roast = f"{interaction.user.display_name} has {len(entries)} picks and somehow all of them are terrible. Impressive."
+
+    await interaction.followup.send(f"{interaction.user.mention}\n{roast}")
 
 
 # ---------------------------------------------------------------------------
