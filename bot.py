@@ -162,7 +162,8 @@ async def generate_brainrot_announcement(period: str, rankings: list[dict]) -> s
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     logging.exception(f"Slash command error in /{interaction.command.name if interaction.command else '?'}", exc_info=error)
-    msg = "Something went wrong. Please try again."
+    cause = getattr(error, "__cause__", error)
+    msg = f"Something went wrong: `{type(cause).__name__}: {str(cause)[:200]}`"
     try:
         if interaction.response.is_done():
             await interaction.followup.send(msg, ephemeral=True)
