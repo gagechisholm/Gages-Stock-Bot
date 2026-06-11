@@ -478,11 +478,13 @@ async def leaderboard(interaction: discord.Interaction):
         timestamp=datetime.now(timezone.utc),
     )
     is_premium = await has_premium(interaction.guild.id)
-    footer = "Ranked by avg % gain across watchlist picks since added"
-    if not is_premium:
-        footer += f" · Want the daily AI roast leaderboard? Upgrade for $5/mo: {upgrade_link(interaction.guild.id)}"
-    embed.set_footer(text=footer)
+    embed.set_footer(text="Ranked by avg % gain across watchlist picks since added")
     await interaction.followup.send(embed=embed)
+    if not is_premium:
+        await interaction.followup.send(
+            f"Want BrainrotGPT to roast these picks every market close? "
+            f"**[Upgrade to Pro for $5/mo]({upgrade_link(interaction.guild.id)})**  ·  or run `/upgrade` to learn more"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -526,6 +528,38 @@ async def setup_info(interaction: discord.Interaction):
 
 
 bot.tree.add_command(setup_group)
+
+
+# ---------------------------------------------------------------------------
+# /upgrade — show Pro features and checkout link
+# ---------------------------------------------------------------------------
+
+@bot.tree.command(name="upgrade", description="See what's included in StockNPC Pro and how to upgrade")
+async def upgrade(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    is_pro = await has_premium(interaction.guild_id)
+    if is_pro:
+        await interaction.followup.send(
+            "This server is already on **StockNPC Pro**. Use `/setup info` to check your config.",
+            ephemeral=True,
+        )
+        return
+
+    link = upgrade_link(interaction.guild_id)
+    embed = discord.Embed(
+        title="Upgrade to StockNPC Pro — $5/month",
+        description=(
+            f"**[Upgrade now]({link})**\n\n"
+            "**What you get on Pro:**\n"
+            "📋 **Unlimited watchlist picks** (free = 5 per person)\n"
+            "🔔 **Unlimited price alerts** (free = 3 per person)\n"
+            "🤖 **Daily BrainrotGPT leaderboard drops** — AI roasts your server's stock picks every market close\n"
+            "📅 Weekly and monthly leaderboards posted automatically\n"
+        ),
+        color=discord.Color.gold(),
+    )
+    embed.set_footer(text="Billed monthly. Cancel anytime.")
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 # ---------------------------------------------------------------------------
