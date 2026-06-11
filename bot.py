@@ -159,7 +159,9 @@ async def generate_brainrot_announcement(period: str, rankings: list[dict]) -> s
                         "Be witty and natural. If a joke isn't casually funny, don't say it. "
                         "Reference comparisons between people to make it feel like a server moment, not solo callouts. "
                         "Casual Gen-Z tone, emojis only when they add something. "
-                        "Never use em dashes, asterisks, or markdown formatting."
+                        "NEVER use em dashes (—) under any circumstances. "
+                        "NEVER use 'it's not X, it's Y' constructions — that's forced and try-hard. "
+                        "Never use asterisks or markdown formatting."
                     ),
                 },
                 {"role": "user", "content": prompt},
@@ -640,7 +642,9 @@ async def roastme(interaction: discord.Interaction):
                         "Ruthless when the person is doing badly, respectful when they're winning. "
                         "Reference the server leaderboard to make comparisons. Keep it short. "
                         "Casual Gen-Z tone, emojis used sparingly and only when they actually add something. "
-                        "Never use em dashes, asterisks, or markdown formatting."
+                        "NEVER use em dashes (—) under any circumstances. "
+                        "NEVER use 'it's not X, it's Y' constructions — that's forced and try-hard. "
+                        "Never use asterisks or markdown formatting."
                     ),
                 },
                 {"role": "user", "content": prompt},
