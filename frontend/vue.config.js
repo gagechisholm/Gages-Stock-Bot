@@ -8,6 +8,6 @@ module.exports = {
   devServer: {
     proxy: "http://localhost:5000",
   },
-  outputDir: "frontend/dist",
+  outputDir: "dist",
   publicPath: "/",
 };
