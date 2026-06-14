@@ -12,10 +12,13 @@ from logging.handlers import RotatingFileHandler
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
+import stripe
 import market
 import db
 
 load_dotenv()
+
+stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -232,23 +235,79 @@ async def on_ready():
 
 
 @bot.event
+async def _cancel_stripe_subscription(customer_id: str) -> bool:
+    loop = asyncio.get_event_loop()
+    try:
+        subs = await loop.run_in_executor(
+            None,
+            lambda: stripe.Subscription.list(customer=customer_id, status="active", limit=1),
+        )
+        if not subs.data:
+            return False
+        sub_id = subs.data[0].id
+        await loop.run_in_executor(None, lambda: stripe.Subscription.cancel(sub_id))
+        return True
+    except Exception:
+        logging.exception(f"Failed to cancel Stripe subscription for customer {customer_id}")
+        return False
+
+
+@bot.event
+async def on_guild_remove(guild: discord.Guild):
+    logging.info(f"Removed from guild: {guild.name} ({guild.id})")
+    try:
+        guild_row = await db.get_guild(guild.id)
+        if not guild_row:
+            return
+        customer_id = guild_row.get("stripe_customer_id")
+        is_pro = guild_row.get("premium_tier", "free") != "free"
+        if customer_id and is_pro:
+            canceled = await _cancel_stripe_subscription(customer_id)
+            if canceled:
+                await db.set_premium_tier(guild.id, "free")
+                logging.info(f"Canceled subscription for guild {guild.id} after bot removal")
+            else:
+                logging.warning(f"Guild {guild.id} was Pro but subscription cancellation failed after removal")
+    except Exception:
+        logging.exception(f"Failed to handle removal for guild {guild.id}")
+
+
 async def on_guild_join(guild: discord.Guild):
     logging.info(f"Joined guild: {guild.name} ({guild.id})")
+
+    previously_subscribed = False
+    try:
+        existing = await db.get_guild(guild.id)
+        previously_subscribed = bool(existing and existing.get("stripe_customer_id"))
+    except Exception:
+        pass
+
     try:
         await db.register_guild(guild.id, guild.name, guild.owner_id)
     except Exception:
         logging.exception(f"Failed to register guild {guild.id} in DB")
 
-    embed = discord.Embed(
-        title="StockNPC is here!",
-        description=(
-            "Thanks for adding StockNPC. Here's how to get started:\n\n"
-            "**Step 1 — Set an alert channel (admin only)**\n"
-            "Run `/setup channel #your-channel` to choose where price alerts post.\n\n"
-            "**Step 2 — Start using commands**"
-        ),
-        color=discord.Color.green(),
-    )
+    if previously_subscribed:
+        embed = discord.Embed(
+            title="Welcome back to StockNPC!",
+            description=(
+                "Your previous Pro subscription was **canceled when the bot was removed** — "
+                "you are not being charged.\n\n"
+                "Run `/upgrade` to re-subscribe and get the daily roast leaderboard back."
+            ),
+            color=discord.Color.orange(),
+        )
+    else:
+        embed = discord.Embed(
+            title="StockNPC is here!",
+            description=(
+                "Thanks for adding StockNPC. Here's how to get started:\n\n"
+                "**Step 1 — Set an alert channel (admin only)**\n"
+                "Run `/setup channel #your-channel` to choose where price alerts post.\n\n"
+                "**Step 2 — Start using commands**"
+            ),
+            color=discord.Color.green(),
+        )
     embed.add_field(name="/quote", value="Get the current price of any stock", inline=False)
     embed.add_field(name="/watchlist add/remove/view", value="Track stocks on your personal watchlist and compete on the leaderboard", inline=False)
     embed.add_field(name="/alert set/list/remove", value="Get notified when a stock moves by a % you set", inline=False)
