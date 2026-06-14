@@ -327,18 +327,18 @@ async def on_guild_join(guild: discord.Guild):
             logging.exception(f"Failed to send welcome message to guild {guild.id}")
 
 
-# ---------------------------------------------------------------------------
-# /quote
-# ---------------------------------------------------------------------------
-
-@bot.tree.command(name="quote", description="Look up the current price of a stock")
-@app_commands.describe(symbol="Ticker symbol (e.g. AAPL, TSLA, SPY)")
 CRYPTO_SYMBOLS = {
     "BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "SHIB", "LTC", "DOT", "AVAX",
     "MATIC", "LINK", "UNI", "BCH", "ALGO", "XLM", "ATOM", "FIL", "TRX", "ETC",
     "BITCOIN", "ETHEREUM", "SOLANA", "DOGECOIN",
 }
 
+# ---------------------------------------------------------------------------
+# /quote
+# ---------------------------------------------------------------------------
+
+@bot.tree.command(name="quote", description="Look up the current price of a stock")
+@app_commands.describe(symbol="Ticker symbol (e.g. AAPL, TSLA, SPY)")
 async def quote(interaction: discord.Interaction, symbol: str):
     await interaction.response.defer()
     if symbol.upper() in CRYPTO_SYMBOLS:
