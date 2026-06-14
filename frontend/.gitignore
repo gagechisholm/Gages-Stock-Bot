@@ -1,6 +1,6 @@
 .DS_Store
 node_modules
-# /dist (remove this line)
+dist
 .env.local
 .env.*.local
 npm-debug.log*
