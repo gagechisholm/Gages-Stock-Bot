@@ -118,9 +118,9 @@ def stripe_checkout():
             cancel_url=f"{FRONTEND_URL}?cancelled=true",
         )
         return redirect(session.url)
-    except Exception as e:
+    except Exception:
         app.logger.exception("Stripe checkout creation failed")
-        return jsonify({"error": "Failed to create checkout session", "detail": str(e)}), 500
+        return jsonify({"error": "Failed to create checkout session"}), 500
 
 
 # ---------------------------------------------------------------------------
