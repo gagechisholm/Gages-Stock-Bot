@@ -146,8 +146,14 @@ def stripe_webhook():
 
     if event_type == "checkout.session.completed":
         session     = event["data"]["object"]
-        guild_id    = session.get("metadata", {}).get("guild_id")
-        customer_id = session.get("customer")
+        try:
+            guild_id = session.metadata.guild_id
+        except AttributeError:
+            guild_id = None
+        try:
+            customer_id = session.customer
+        except AttributeError:
+            customer_id = None
         if guild_id:
             try:
                 asyncio.run(db.set_premium_tier(int(guild_id), "pro"))
@@ -159,7 +165,10 @@ def stripe_webhook():
 
     elif event_type in ("customer.subscription.deleted", "customer.subscription.paused"):
         subscription = event["data"]["object"]
-        guild_id = subscription.get("metadata", {}).get("guild_id")
+        try:
+            guild_id = subscription.metadata.guild_id
+        except AttributeError:
+            guild_id = None
         if guild_id:
             try:
                 asyncio.run(db.set_premium_tier(int(guild_id), "free"))
