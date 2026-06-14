@@ -114,13 +114,14 @@ def stripe_checkout():
             automatic_payment_methods={"enabled": True},
             line_items=[{"price": STRIPE_PRO_PRICE_ID, "quantity": 1}],
             metadata={"guild_id": guild_id},
+            subscription_data={"metadata": {"guild_id": guild_id}},
             success_url=f"{FRONTEND_URL}?upgraded=true&guild_id={guild_id}",
             cancel_url=f"{FRONTEND_URL}?cancelled=true",
         )
         return redirect(session.url)
-    except Exception:
+    except Exception as e:
         app.logger.exception("Stripe checkout creation failed")
-        return jsonify({"error": "Failed to create checkout session"}), 500
+        return jsonify({"error": "Failed to create checkout session", "detail": str(e)}), 500
 
 
 # ---------------------------------------------------------------------------

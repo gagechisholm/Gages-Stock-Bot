@@ -48,6 +48,9 @@ FREE_ROAST_LIMIT     = 2
 def upgrade_link(guild_id: int) -> str:
     return f"{API_URL}/stripe/checkout?guild_id={guild_id}"
 
+def manage_link(guild_id: int) -> str:
+    return f"{API_URL}/stripe/portal?guild_id={guild_id}"
+
 _openai_client: AsyncOpenAI | None = None
 _leaderboard_posted: set[str] = set()  # "guild_id:date" keys to prevent double-posting
 
@@ -759,6 +762,27 @@ async def upgrade(interaction: discord.Interaction):
     )
     embed.set_footer(text="Billed monthly. Cancel anytime.")
     await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="cancel", description="Cancel your StockNPC Pro subscription")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def cancel(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    is_pro = await has_premium(interaction.guild_id)
+    if not is_pro:
+        await interaction.followup.send(
+            "This server isn't on Pro — nothing to cancel.",
+            ephemeral=True,
+        )
+        return
+
+    link = manage_link(interaction.guild_id)
+    await interaction.followup.send(
+        f"**[Manage or cancel your subscription]({link})**\n\n"
+        "Opens the Stripe billing portal where you can cancel anytime. "
+        "Pro stays active until the end of your billing period.",
+        ephemeral=True,
+    )
 
 
 # ---------------------------------------------------------------------------
