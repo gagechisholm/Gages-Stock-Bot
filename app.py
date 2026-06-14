@@ -111,7 +111,6 @@ def stripe_checkout():
     try:
         session = stripe.checkout.Session.create(
             mode="subscription",
-            automatic_payment_methods={"enabled": True},
             line_items=[{"price": STRIPE_PRO_PRICE_ID, "quantity": 1}],
             metadata={"guild_id": guild_id},
             subscription_data={"metadata": {"guild_id": guild_id}},
